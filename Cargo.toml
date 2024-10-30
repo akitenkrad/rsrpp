@@ -1,0 +1,12 @@
+[package]
+name = "rsrpp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.91"
+chrono = "0.4.38"
+rand = "0.8.5"
+reqwest = "0.12.9"
+scraper = "0.20.0"
+tokio = { version = "1.41.0", features = ["full"] }
