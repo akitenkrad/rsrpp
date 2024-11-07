@@ -2,46 +2,48 @@
 
 [![CircleCI](https://dl.circleci.com/status-badge/img/circleci/X1fiE4koKU88Z9sKwWoPAH/S2NQ8VZz6F1CZ6vuvFBE3Y/tree/main.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/circleci/X1fiE4koKU88Z9sKwWoPAH/S2NQ8VZz6F1CZ6vuvFBE3Y/tree/main)
 
-## Getting Started
+The `rsrpp` library provides a set of tools for parsing research papers.
+
+## Quick Start
+
+### Pre-requisites
+
+- Poppler: `sudo apt install poppler-utils`
+- OpenCV: `sudo apt install libopencv-dev clang libclang-dev`
 
 ### Installation
 
-```sh
-cargo install rsrpp
+To start using the `rsrpp` library, add it to your `Cargo.toml`:
+
+```toml
+[dependencies]
+rsrpp = "1.0.0"
+```
+
+Then, import the necessary modules in your code:
+
+```rust
+extern crate rsrpp;
+use rsrpp::parser;
 ```
 
 ### Examples
 
-Here are a few examples to help you get started with `rsrpp`:
-
-#### Parsing a Research Paper
-
-To parse a research paper, use the following command:
+Here is a simple example of how to use the parser module:
 
 ```rust
-use rsrpp::parser::{ParseConfig, parse};
-
-#[tokio::main]
-async fn main() {
-    let mut config = ParserConfig::new();
-    let url = "https://arxiv.org/pdf/2410.24080";
-    let res = parse(url, &mut config).await;
-    let pages = res.unwrap(); // Vec<Page>
-}
+let mut config = ParserConfig::new();
+let url = "https://arxiv.org/pdf/1706.03762";
+let pages = parse(url, &mut config).await.unwrap(); // Vec<Page>
+let json = pages2json(&pages);
 ```
 
-#### Extract Texts as json
+### Tests
 
-```rust
-use rsrpp::parser::{ParseConfig, parse};
+The library includes a set of tests to ensure its functionality. To run the tests, use the following command:
 
-#[tokio::main]
-async fn main() {
-    let mut config = ParserConfig::new();
-    let url = "https://arxiv.org/pdf/1706.03762";
-    let pages = parse(url, &mut config).await.unwrap();
-    let json = pages2json(&pages);
-}
+```sh
+cargo test
 ```
 
-For more detailed usage and options, refer to the [source code](https://github.com/akitenkrad/rsrpp).
+License: MIT

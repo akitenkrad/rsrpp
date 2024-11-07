@@ -4,6 +4,11 @@
 //!
 //! ## Quick Start
 //!
+//! ### Pre-requisites
+//! - Poppler: `sudo apt install poppler-utils`
+//! - OpenCV: `sudo apt install libopencv-dev clang libclang-dev`
+//!
+//! ### Installation
 //! To start using the `rsrpp` library, add it to your `Cargo.toml`:
 //!
 //! ```toml
@@ -30,14 +35,12 @@
 //! let url = "https://arxiv.org/pdf/1706.03762";
 //! let pages = parse(url, &mut config).await.unwrap(); // Vec<Page>
 //! let json = pages2json(&pages);
-//! println!("Parsed text: {}", json);
 //! # Ok(())
 //! # }
 //! # #[tokio::main]
 //! # async fn main() {
 //! #    try_main().await.unwrap();
 //! # }
-//!
 //! ```
 //!
 //! ## Tests
