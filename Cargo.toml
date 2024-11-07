@@ -1,7 +1,7 @@
 [package]
 name = "rsrpp"
 version = "1.0.0"
-edition = "2024"
+edition = "2021"
 description = "A Rust project for research paper pdf."
 repository = "https://github.com/akitenkrad/rsrpp.git"
 license = "MIT License"
