@@ -93,8 +93,6 @@ async fn test_pdf2html_file() {
 #[tokio::test]
 async fn test_parse_1() {
     let mut config = ParserConfig::new();
-    // let url = "https://arxiv.org/pdf/1706.03762";
-    // let url = "https://arxiv.org/pdf/2410.24080";
     let url = "https://arxiv.org/pdf/2308.10379";
     let res = parse(url, &mut config).await;
     let pages = res.unwrap();
@@ -127,7 +125,6 @@ async fn test_parse_1() {
 async fn test_parse_2() {
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/1706.03762";
-    // let url = "https://arxiv.org/pdf/2410.24080";
     let res = parse(url, &mut config).await;
     let pages = res.unwrap();
 
@@ -207,9 +204,29 @@ fn test_coordinate_is_intercept() {
 }
 
 #[tokio::test]
-async fn test_pdf_to_json() {
+async fn test_pdf_to_json_1() {
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/1706.03762";
+    let pages = parse(url, &mut config).await.unwrap();
+    let json = pages2json(&pages);
+    println!("{}", json);
+    assert!(json.len() > 0);
+}
+
+#[tokio::test]
+async fn test_pdf_to_json_2() {
+    let mut config = ParserConfig::new();
+    let url = "https://arxiv.org/pdf/2308.10379";
+    let pages = parse(url, &mut config).await.unwrap();
+    let json = pages2json(&pages);
+    println!("{}", json);
+    assert!(json.len() > 0);
+}
+
+#[tokio::test]
+async fn test_pdf_to_json_3() {
+    let mut config = ParserConfig::new();
+    let url = "https://arxiv.org/pdf/2410.24080";
     let pages = parse(url, &mut config).await.unwrap();
     let json = pages2json(&pages);
     println!("{}", json);

@@ -21,6 +21,15 @@ mod tests;
 
 pub mod structs;
 
+/// Retrieves information about a PDF document using the `pdfinfo` command.
+///
+/// # Arguments
+///
+/// * `config` - A mutable reference to a `ParserConfig` instance containing the path to the PDF file.
+///
+/// # Returns
+///
+/// A `Result` which is `Ok` if the information was successfully retrieved, or an `Err` if an error occurred.
 fn get_pdf_info(config: &mut ParserConfig) -> Result<()> {
     let res =
         Command::new("pdfinfo").args(&[config.pdf_path.clone()]).stdout(Stdio::piped()).output();
@@ -44,6 +53,15 @@ fn get_pdf_info(config: &mut ParserConfig) -> Result<()> {
     return Ok(());
 }
 
+/// Saves each page of a PDF document as separate JPEG files using the `pdftocairo` command.
+///
+/// # Arguments
+///
+/// * `config` - A mutable reference to a `ParserConfig` instance containing the path to the PDF file.
+///
+/// # Returns
+///
+/// A `Result` which is `Ok` if the pages were successfully saved as JPEG files, or an `Err` if an error occurred.
 fn save_pdf_as_figures(config: &mut ParserConfig) -> Result<()> {
     let pdf_path = Path::new(config.pdf_path.as_str());
     let dst_path = pdf_path.parent().unwrap().join(pdf_path.file_stem().unwrap().to_str().unwrap());
@@ -88,6 +106,15 @@ fn save_pdf_as_figures(config: &mut ParserConfig) -> Result<()> {
     return Ok(());
 }
 
+/// Saves the content of a PDF document as an XML file using the `pdftohtml` command.
+///
+/// # Arguments
+///
+/// * `config` - A mutable reference to a `ParserConfig` instance containing the path to the PDF file.
+///
+/// # Returns
+///
+/// A `Result` which is `Ok` if the content was successfully saved as an XML file, or an `Err` if an error occurred.
 fn save_pdf_as_xml(config: &mut ParserConfig) -> Result<()> {
     let xml_path = Path::new(&config.pdf_xml_path);
 
@@ -197,6 +224,15 @@ fn save_pdf_as_xml(config: &mut ParserConfig) -> Result<()> {
     return Ok(());
 }
 
+/// Saves the content of a PDF document as a text file using the `pdftotext` command.
+///
+/// # Arguments
+///
+/// * `config` - A mutable reference to a `ParserConfig` instance containing the path to the PDF file.
+///
+/// # Returns
+///
+/// A `Result` which is `Ok` if the content was successfully saved as a text file, or an `Err` if an error occurred.
 fn save_pdf_as_text(config: &mut ParserConfig) -> Result<()> {
     let html_path = Path::new(config.pdf_text_path.as_str());
 
@@ -217,6 +253,16 @@ fn save_pdf_as_text(config: &mut ParserConfig) -> Result<()> {
     return Ok(());
 }
 
+/// Downloads and saves a PDF document from a given URL or local path.
+///
+/// # Arguments
+///
+/// * `path_or_url` - A string slice that holds the URL or local path of the PDF document.
+/// * `config` - A mutable reference to a `ParserConfig` instance containing the path to save the PDF file.
+///
+/// # Returns
+///
+/// An `async` `Result` which is `Ok` if the PDF was successfully saved, or an `Err` if an error occurred.
 async fn save_pdf(path_or_url: &str, config: &mut ParserConfig) -> Result<()> {
     let save_path = config.pdf_path.as_str();
     if path_or_url.starts_with("http") {
@@ -244,6 +290,16 @@ async fn save_pdf(path_or_url: &str, config: &mut ParserConfig) -> Result<()> {
     return Ok(());
 }
 
+/// Converts a PDF document to HTML format.
+///
+/// # Arguments
+///
+/// * `path_or_url` - A string slice that holds the URL or local path of the PDF document.
+/// * `config` - A mutable reference to a `ParserConfig` instance containing the configuration for the conversion.
+///
+/// # Returns
+///
+/// An `async` `Result` containing an `html::Html` instance if the conversion was successful, or an `Err` if an error occurred.
 async fn pdf2html(path_or_url: &str, config: &mut ParserConfig) -> Result<html::Html> {
     save_pdf(path_or_url, config).await?;
 
@@ -257,6 +313,14 @@ async fn pdf2html(path_or_url: &str, config: &mut ParserConfig) -> Result<html::
     return Ok(html);
 }
 
+/// Extracts tables from an image and stores their coordinates.
+///
+/// # Arguments
+///
+/// * `image_path` - A string slice that holds the path to the image file.
+/// * `tables` - A mutable reference to a vector of `Coordinate` instances to store the table coordinates.
+/// * `width` - The width of the image.
+/// * `height` - The height of the image.
 fn extract_tables(image_path: &str, tables: &mut Vec<Coordinate>, width: i32, height: i32) {
     // read the image
     let _src = imgcodecs::imread(image_path, imgcodecs::IMREAD_COLOR).unwrap();
@@ -342,7 +406,16 @@ fn extract_tables(image_path: &str, tables: &mut Vec<Coordinate>, width: i32, he
     }
 }
 
-pub fn get_text_area(pages: &Vec<Page>) -> Coordinate {
+/// Computes the bounding box that contains all text areas across multiple pages.
+///
+/// # Arguments
+///
+/// * `pages` - A reference to a vector of `Page` instances.
+///
+/// # Returns
+///
+/// A `Coordinate` representing the bounding box that contains all text areas.
+fn get_text_area(pages: &Vec<Page>) -> Coordinate {
     let mut left_values: Vec<f32> = Vec::new();
     let mut right_values: Vec<f32> = Vec::new();
     let mut top_values: Vec<f32> = Vec::new();
@@ -371,6 +444,12 @@ pub fn get_text_area(pages: &Vec<Page>) -> Coordinate {
     };
 }
 
+/// Adjusts the columns of text in the PDF pages based on the page width and configuration.
+///
+/// # Arguments
+///
+/// * `pages` - A mutable reference to a vector of `Page` instances.
+/// * `config` - A reference to a `ParserConfig` instance containing the configuration for the adjustment.
 fn adjst_columns(pages: &mut Vec<Page>, config: &ParserConfig) {
     let page_width = config.pdf_info.get("page_width").unwrap().parse::<f32>().unwrap();
     let half_width = page_width / 2.2;
@@ -394,6 +473,7 @@ fn adjst_columns(pages: &mut Vec<Page>, config: &ParserConfig) {
     if avg_line_width < page_width / 1.5 {
         // Tow Columns
         for page in pages.iter_mut() {
+            page.number_of_columns = 2;
             let mut right_blocks: Vec<Block> = Vec::new();
             let mut left_blocks: Vec<Block> = Vec::new();
             for block in page.blocks.iter() {
@@ -409,6 +489,16 @@ fn adjst_columns(pages: &mut Vec<Page>, config: &ParserConfig) {
     }
 }
 
+/// Parses a PDF document from a given URL or local path and extracts its pages.
+///
+/// # Arguments
+///
+/// * `path_or_url` - A string slice that holds the URL or local path of the PDF document.
+/// * `config` - A mutable reference to a `ParserConfig` instance containing the configuration for the parsing.
+///
+/// # Returns
+///
+/// An `async` `Result` containing a vector of `Page` instances if the parsing was successful, or an `Err` if an error occurred.
 pub async fn parse(path_or_url: &str, config: &mut ParserConfig) -> Result<Vec<Page>> {
     let html = pdf2html(path_or_url, config).await?;
 
@@ -495,6 +585,38 @@ pub async fn parse(path_or_url: &str, config: &mut ParserConfig) -> Result<Vec<P
         }
     }
 
+    // compare text area and blocks
+    let section_titles =
+        config.sections.iter().map(|(_, section)| section.to_lowercase()).collect::<Vec<String>>();
+    let text_area = get_text_area(&pages);
+    let title_index_regex = regex::Regex::new(r"\d+\.").unwrap();
+    for page in pages.iter_mut() {
+        let mut remove_indices: Vec<usize> = Vec::new();
+        let width = if page.number_of_columns == 2 {
+            page.width / 2.2
+        } else {
+            page.width / 1.1
+        };
+        for (i, block) in page.blocks.iter_mut().enumerate() {
+            let block_coord = Coordinate::from_object(block.x, block.y, block.width, block.height);
+            let iou = text_area.iou(&block_coord);
+            let block_text = block.get_text();
+            let block_text = title_index_regex.replace(&block_text, "").trim().to_string();
+
+            if (iou - 0.0).abs() < 1e-6 {
+                remove_indices.push(i);
+            } else if !section_titles.contains(&block_text.to_lowercase())
+                && (block.width / width < 0.3 && block.lines.len() < 4)
+            {
+                println!("{}: {}", block_text, block.width / width);
+                remove_indices.push(i);
+            }
+        }
+        for i in remove_indices.iter().rev() {
+            page.blocks.remove(*i);
+        }
+    }
+
     adjst_columns(&mut pages, config);
 
     // set section for each block
@@ -520,6 +642,15 @@ pub async fn parse(path_or_url: &str, config: &mut ParserConfig) -> Result<Vec<P
     return Ok(pages);
 }
 
+/// Converts a vector of `Page` instances to a JSON string representing the sections of the PDF document.
+///
+/// # Arguments
+///
+/// * `pages` - A reference to a vector of `Page` instances.
+///
+/// # Returns
+///
+/// A `String` containing the JSON representation of the sections.
 pub fn pages2json(pages: &Vec<Page>) -> String {
     let sections = Section::from_pages(pages);
     let json = serde_json::to_string(&sections).unwrap();
