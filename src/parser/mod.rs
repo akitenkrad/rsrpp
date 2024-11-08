@@ -653,6 +653,13 @@ pub async fn parse(path_or_url: &str, config: &mut ParserConfig) -> Result<Vec<P
 /// A `String` containing the JSON representation of the sections.
 pub fn pages2json(pages: &Vec<Page>) -> String {
     let sections = Section::from_pages(pages);
-    let json = serde_json::to_string(&sections).unwrap();
+    let mut json_data = Vec::<HashMap<&str, String>>::new();
+    for section in sections.iter() {
+        let mut data = HashMap::new();
+        data.insert("title", section.title.clone());
+        data.insert("contents", section.get_text());
+        json_data.push(data);
+    }
+    let json = serde_json::to_string(&json_data).unwrap();
     return json;
 }

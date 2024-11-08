@@ -4,16 +4,15 @@
 //!
 //! ## Quick Start
 //!
-//! ### Pre-requisites
+//! ### Pre-requirements
 //! - Poppler: `sudo apt install poppler-utils`
 //! - OpenCV: `sudo apt install libopencv-dev clang libclang-dev`
 //!
 //! ### Installation
-//! To start using the `rsrpp` library, add it to your `Cargo.toml`:
+//! To start using the `rsrpp` library, add it to your project's dependencies in the `Cargo.toml` file:
 //!
-//! ```toml
-//! [dependencies]
-//! rsrpp = "1.0.0"
+//! ```bash
+//! cargo add rsrpp
 //! ```
 //!
 //! Then, import the necessary modules in your code:
@@ -28,13 +27,14 @@
 //! Here is a simple example of how to use the parser module:
 //!
 //! ```rust
-//! # use rsrpp::parser::structs::ParserConfig;
+//! # use rsrpp::parser::structs::{ParserConfig, Section};
 //! # use rsrpp::parser::{parse, pages2json};
 //! # async fn try_main() -> Result<(), String> {
 //! let mut config = ParserConfig::new();
 //! let url = "https://arxiv.org/pdf/1706.03762";
 //! let pages = parse(url, &mut config).await.unwrap(); // Vec<Page>
-//! let json = pages2json(&pages);
+//! let sections = Section::from_pages(&pages); // Vec<Section>
+//! let json = serde_json::to_string(&sections).unwrap(); // String
 //! # Ok(())
 //! # }
 //! # #[tokio::main]

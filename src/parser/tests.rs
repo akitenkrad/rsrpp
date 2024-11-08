@@ -208,6 +208,18 @@ async fn test_pdf_to_json_1() {
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/1706.03762";
     let pages = parse(url, &mut config).await.unwrap();
+    let sections = Section::from_pages(&pages);
+
+    for section in sections.iter() {
+        assert!(section.title.len() > 0);
+        assert!(section.contents.len() > 0);
+        println!("{}: {}", section.title, section.get_text());
+    }
+
+    let json = serde_json::to_string(&sections).unwrap();
+    println!("{}", json);
+    assert!(json.len() > 0);
+
     let json = pages2json(&pages);
     println!("{}", json);
     assert!(json.len() > 0);
@@ -218,6 +230,18 @@ async fn test_pdf_to_json_2() {
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/2308.10379";
     let pages = parse(url, &mut config).await.unwrap();
+    let sections = Section::from_pages(&pages);
+
+    for section in sections.iter() {
+        assert!(section.title.len() > 0);
+        assert!(section.contents.len() > 0);
+        println!("{}: {}", section.title, section.get_text());
+    }
+
+    let json = serde_json::to_string(&sections).unwrap();
+    println!("{}", json);
+    assert!(json.len() > 0);
+
     let json = pages2json(&pages);
     println!("{}", json);
     assert!(json.len() > 0);
@@ -228,6 +252,18 @@ async fn test_pdf_to_json_3() {
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/2410.24080";
     let pages = parse(url, &mut config).await.unwrap();
+    let sections = Section::from_pages(&pages);
+
+    for section in sections.iter() {
+        assert!(section.title.len() > 0);
+        assert!(section.contents.len() > 0);
+        println!("{}: {}", section.title, section.get_text());
+    }
+
+    let json = serde_json::to_string(&sections).unwrap();
+    println!("{}", json);
+    assert!(json.len() > 0);
+
     let json = pages2json(&pages);
     println!("{}", json);
     assert!(json.len() > 0);

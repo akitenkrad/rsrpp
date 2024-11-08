@@ -441,7 +441,7 @@ impl Page {
 ///
 /// * `x` - The x-coordinate of the point.
 /// * `y` - The y-coordinate of the point.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Point {
     pub x: f32,
     pub y: f32,
@@ -461,7 +461,7 @@ impl Point {
 /// * `top_right` - The top-right corner of the rectangle.
 /// * `bottom_left` - The bottom-left corner of the rectangle.
 /// * `bottom_right` - The bottom-right corner of the rectangle.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Coordinate {
     pub top_left: Point,
     pub top_right: Point,
@@ -624,6 +624,25 @@ impl Coordinate {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextBlock {
+    pub text: String,
+    pub coordinates: Coordinate,
+}
+
+pub struct Reference {
+    pub text: String,
+    pub coordinates: Coordinate,
+}
+
+impl TextBlock {
+    pub fn from_block(block: &Block) -> TextBlock {
+        TextBlock {
+            text: block.get_text(),
+            coordinates: Coordinate::from_object(block.x, block.y, block.width, block.height),
+        }
+    }
+}
 /// The `Section` struct represents a section in a PDF document.
 ///
 /// # Fields
@@ -634,7 +653,7 @@ impl Coordinate {
 pub struct Section {
     pub index: i8,
     pub title: String,
-    pub content: String,
+    pub contents: Vec<TextBlock>,
 }
 
 impl Section {
@@ -649,28 +668,43 @@ impl Section {
     /// A vector of `Section` instances, each representing a section in the PDF document.
     pub fn from_pages(pages: &Vec<Page>) -> Vec<Section> {
         let mut section_indices: HashMap<String, i8> = HashMap::new();
-        let mut section_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut section_map: HashMap<String, Vec<TextBlock>> = HashMap::new();
         for page in pages {
             for block in &page.blocks {
                 let keys = section_map.keys().cloned().collect::<Vec<String>>();
+                let text_block = TextBlock::from_block(&block);
                 if keys.contains(&block.section) {
                     let content = section_map.get_mut(&block.section).unwrap();
-                    content.push(block.get_text().clone());
+                    content.push(text_block);
                 } else {
-                    section_map.insert(block.section.clone(), vec![block.get_text().clone()]);
+                    section_map.insert(block.section.clone(), vec![text_block]);
                     section_indices.insert(block.section.clone(), section_indices.len() as i8);
                 }
             }
         }
         let mut sections = Vec::new();
-        for (title, content) in section_map {
+        for (title, contents) in section_map {
             sections.push(Section {
                 index: section_indices.get(&title).unwrap().clone(),
                 title: title,
-                content: content.join("\n"),
+                contents: contents.clone(),
             });
         }
         sections.sort_by(|a, b| a.index.cmp(&b.index));
         return sections;
+    }
+
+    /// Returns the concatenated text of all `TextBlock` instances in the `Section`.
+    ///
+    /// # Returns
+    ///
+    /// A `String` containing the text of all contents in the section, separated by newlines.
+    pub fn get_text(&self) -> String {
+        let mut text = String::new();
+        for content in &self.contents {
+            text.push_str(&content.text);
+            text.push_str("\n");
+        }
+        return text;
     }
 }
