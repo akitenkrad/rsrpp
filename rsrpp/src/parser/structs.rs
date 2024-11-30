@@ -653,7 +653,7 @@ impl TextBlock {
 pub struct Section {
     pub index: i8,
     pub title: String,
-    pub contents: Vec<TextBlock>,
+    pub contents: Vec<String>,
 }
 
 impl Section {
@@ -668,11 +668,11 @@ impl Section {
     /// A vector of `Section` instances, each representing a section in the PDF document.
     pub fn from_pages(pages: &Vec<Page>) -> Vec<Section> {
         let mut section_indices: HashMap<String, i8> = HashMap::new();
-        let mut section_map: HashMap<String, Vec<TextBlock>> = HashMap::new();
+        let mut section_map: HashMap<String, Vec<String>> = HashMap::new();
         for page in pages {
             for block in &page.blocks {
                 let keys = section_map.keys().cloned().collect::<Vec<String>>();
-                let text_block = TextBlock::from_block(&block);
+                let text_block = block.get_text();
                 if keys.contains(&block.section) {
                     let content = section_map.get_mut(&block.section).unwrap();
                     content.push(text_block);
@@ -687,7 +687,7 @@ impl Section {
             sections.push(Section {
                 index: section_indices.get(&title).unwrap().clone(),
                 title: title,
-                contents: contents.clone(),
+                contents: contents,
             });
         }
         sections.sort_by(|a, b| a.index.cmp(&b.index));
@@ -700,11 +700,10 @@ impl Section {
     ///
     /// A `String` containing the text of all contents in the section, separated by newlines.
     pub fn get_text(&self) -> String {
-        let mut text = String::new();
-        for content in &self.contents {
-            text.push_str(&content.text);
-            text.push_str("\n");
+        if self.contents.len() == 0 {
+            return String::new();
+        } else {
+            return self.contents.join("\n");
         }
-        return text;
     }
 }

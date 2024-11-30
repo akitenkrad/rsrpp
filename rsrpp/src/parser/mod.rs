@@ -96,7 +96,6 @@ fn save_pdf_as_figures(config: &mut ParserConfig) -> Result<()> {
                     .last()
                     .unwrap()
                     .parse::<i8>()?;
-                println!("page_number: {} - {}", page_number, path.to_str().unwrap());
                 config.pdf_figures.insert(page_number, path.to_str().unwrap().to_string());
             }
             Err(e) => return Err(Error::msg(format!("Error: {}", e))),
@@ -608,7 +607,6 @@ pub async fn parse(path_or_url: &str, config: &mut ParserConfig) -> Result<Vec<P
             } else if !section_titles.contains(&block_text.to_lowercase())
                 && (block.width / width < 0.3 && block.lines.len() < 4)
             {
-                println!("{}: {}", block_text, block.width / width);
                 remove_indices.push(i);
             }
         }
