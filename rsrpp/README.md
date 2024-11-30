@@ -58,4 +58,4 @@ License: MIT
 
 ### 1.0.3
 
-- added cli.
+- added cli -> [rsrpp-cli](https://crates.io/crates/rsrpp-cli).

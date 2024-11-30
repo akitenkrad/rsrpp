@@ -55,3 +55,7 @@ License: MIT
 ### 1.0.2
 
 - Updated the `Section` module. `content: String` was replaced by `content: Vec<TextBlock>`.
+
+### 1.0.3
+
+- added cli -> [rsrpp-cli](https://crates.io/crates/rsrpp-cli).
