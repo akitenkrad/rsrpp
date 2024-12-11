@@ -52,10 +52,15 @@ License: MIT
 
 ## Releases
 
-### 1.0.2
+### 1.0.4
 
-- Updated the `Section` module. `content: String` was replaced by `content: Vec<TextBlock>`.
+- Fixed bugs in `get_pdf_info`.
+- Made minor improvements.
 
 ### 1.0.3
 
-- added cli -> [rsrpp-cli](https://crates.io/crates/rsrpp-cli).
+- Added cli -> [rsrpp-cli](https://crates.io/crates/rsrpp-cli).
+
+### 1.0.2
+
+- Updated the `Section` module. `content: String` was replaced by `content: Vec<TextBlock>`.

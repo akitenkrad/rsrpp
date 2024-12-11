@@ -296,11 +296,11 @@ impl Block {
     pub fn get_text(&self) -> String {
         let mut text = String::new();
         for line in &self.lines {
-            text = text.trim_end_matches("- ").to_string();
-            text.push_str(&line.get_text());
+            text = text.trim().trim_end_matches("-").to_string();
             text.push_str(" ");
+            text.push_str(&line.get_text());
         }
-        return text;
+        return text.trim().to_string();
     }
 }
 
@@ -669,10 +669,28 @@ impl Section {
     pub fn from_pages(pages: &Vec<Page>) -> Vec<Section> {
         let mut section_indices: HashMap<String, i8> = HashMap::new();
         let mut section_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut last_text = String::new();
+        let eos_ptn = regex::Regex::new(r"(\.)(\W)").unwrap();
+        let ex_ws_ptn = regex::Regex::new(r"\s+").unwrap();
         for page in pages {
             for block in &page.blocks {
                 let keys = section_map.keys().cloned().collect::<Vec<String>>();
-                let text_block = block.get_text();
+                let mut text_block = block.get_text().trim().to_string();
+
+                if text_block.ends_with("-") {
+                    last_text.push_str(&text_block.trim_end_matches("-"));
+                    continue;
+                }
+
+                if !last_text.is_empty() {
+                    last_text.push_str(&text_block);
+                    text_block = last_text.clone();
+                    last_text.clear();
+                }
+
+                text_block = eos_ptn.replace_all(&text_block, "$1 $2").to_string();
+                text_block = ex_ws_ptn.replace_all(&text_block, " ").to_string();
+
                 if keys.contains(&block.section) {
                     let content = section_map.get_mut(&block.section).unwrap();
                     content.push(text_block);

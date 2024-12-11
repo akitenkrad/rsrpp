@@ -43,7 +43,7 @@ fn get_pdf_info(config: &mut ParserConfig) -> Result<()> {
         let value = parts[1].trim().to_string();
 
         if key == "page_size" {
-            let regex = regex::Regex::new(r"(\d+) x (\d+)")?;
+            let regex = regex::Regex::new(r"([\d|\.]+) x ([\d|\.]+).*?")?;
             let caps = regex.captures(&value).unwrap();
             config.pdf_info.insert("page_width".to_string(), caps[1].to_string());
             config.pdf_info.insert("page_height".to_string(), caps[2].to_string());
@@ -451,7 +451,6 @@ fn get_text_area(pages: &Vec<Page>) -> Coordinate {
 /// * `config` - A reference to a `ParserConfig` instance containing the configuration for the adjustment.
 fn adjst_columns(pages: &mut Vec<Page>, config: &ParserConfig) {
     let page_width = config.pdf_info.get("page_width").unwrap().parse::<f32>().unwrap();
-    let half_width = page_width / 2.2;
     let last_page = config.sections.iter().map(|(page_number, _)| page_number).max().unwrap();
     let avg_line_width = pages
         .iter()
@@ -469,6 +468,7 @@ fn adjst_columns(pages: &mut Vec<Page>, config: &ParserConfig) {
         .sum::<f32>()
         / pages.len() as f32;
 
+    let half_width = page_width / 2.2;
     if avg_line_width < page_width / 1.5 {
         // Tow Columns
         for page in pages.iter_mut() {
@@ -488,19 +488,7 @@ fn adjst_columns(pages: &mut Vec<Page>, config: &ParserConfig) {
     }
 }
 
-/// Parses a PDF document from a given URL or local path and extracts its pages.
-///
-/// # Arguments
-///
-/// * `path_or_url` - A string slice that holds the URL or local path of the PDF document.
-/// * `config` - A mutable reference to a `ParserConfig` instance containing the configuration for the parsing.
-///
-/// # Returns
-///
-/// An `async` `Result` containing a vector of `Page` instances if the parsing was successful, or an `Err` if an error occurred.
-pub async fn parse(path_or_url: &str, config: &mut ParserConfig) -> Result<Vec<Page>> {
-    let html = pdf2html(path_or_url, config).await?;
-
+fn parse_html2pages(config: &mut ParserConfig, html: html::Html) -> Result<Vec<Page>> {
     let mut pages = Vec::new();
     let page_selector = scraper::Selector::parse("page").unwrap();
     let _pages = html.select(&page_selector);
@@ -583,8 +571,10 @@ pub async fn parse(path_or_url: &str, config: &mut ParserConfig) -> Result<Vec<P
             pages.push(_page);
         }
     }
+    return Ok(pages);
+}
 
-    // compare text area and blocks
+fn parse_extract_textarea(config: &mut ParserConfig, pages: &mut Vec<Page>) -> Result<()> {
     let section_titles =
         config.sections.iter().map(|(_, section)| section.to_lowercase()).collect::<Vec<String>>();
     let text_area = get_text_area(&pages);
@@ -614,10 +604,10 @@ pub async fn parse(path_or_url: &str, config: &mut ParserConfig) -> Result<Vec<P
             page.blocks.remove(*i);
         }
     }
+    return Ok(());
+}
 
-    adjst_columns(&mut pages, config);
-
-    // set section for each block
+fn parse_extract_secsions(config: &mut ParserConfig, pages: &mut Vec<Page>) -> Result<()> {
     let mut current_section = "Abstract".to_string();
     let mut page_number = 1;
     let title_regex = regex::Regex::new(r"\d+\.").unwrap();
@@ -636,6 +626,32 @@ pub async fn parse(path_or_url: &str, config: &mut ParserConfig) -> Result<Vec<P
         }
         page_number += 1;
     }
+    return Ok(());
+}
+/// Parses a PDF document from a given URL or local path and extracts its pages.
+///
+/// # Arguments
+///
+/// * `path_or_url` - A string slice that holds the URL or local path of the PDF document.
+/// * `config` - A mutable reference to a `ParserConfig` instance containing the configuration for the parsing.
+///
+/// # Returns
+///
+/// An `async` `Result` containing a vector of `Page` instances if the parsing was successful, or an `Err` if an error occurred.
+pub async fn parse(path_or_url: &str, config: &mut ParserConfig) -> Result<Vec<Page>> {
+    let html = pdf2html(path_or_url, config).await?;
+
+    // parse html into pages
+    let mut pages = parse_html2pages(config, html)?;
+
+    // compare text area and blocks
+    parse_extract_textarea(config, &mut pages)?;
+
+    // adjust columns
+    adjst_columns(&mut pages, config);
+
+    // set section for each block
+    parse_extract_secsions(config, &mut pages)?;
 
     return Ok(pages);
 }

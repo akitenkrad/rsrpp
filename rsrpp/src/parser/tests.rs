@@ -32,6 +32,31 @@ async fn test_save_pdf_1() {
 }
 
 #[tokio::test]
+async fn test_adjust_columns() {
+    let mut config = ParserConfig::new();
+    let url = "https://arxiv.org/pdf/2411.19655";
+
+    let html = pdf2html(url, &mut config).await.unwrap();
+
+    // parse html into pages
+    let mut pages = parse_html2pages(&mut config, html).unwrap();
+
+    // compare text area and blocks
+    parse_extract_textarea(&mut config, &mut pages).unwrap();
+
+    // adjust columns
+    adjst_columns(&mut pages, &mut config);
+
+    println!("{}", &pages[0].number_of_columns);
+    let sections = Section::from_pages(&pages);
+    for section in sections.iter() {
+        println!("{}: {}", section.title, section.get_text());
+    }
+
+    assert_eq!(pages[0].number_of_columns, 2);
+}
+
+#[tokio::test]
 async fn test_save_pdf_2() {
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/2308.10379";
