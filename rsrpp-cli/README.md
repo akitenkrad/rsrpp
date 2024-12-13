@@ -1,10 +1,13 @@
 # Rust Research Paper Parser (rsrpp)
 
 [![CircleCI](https://dl.circleci.com/status-badge/img/circleci/X1fiE4koKU88Z9sKwWoPAH/S2NQ8VZz6F1CZ6vuvFBE3Y/tree/main.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/circleci/X1fiE4koKU88Z9sKwWoPAH/S2NQ8VZz6F1CZ6vuvFBE3Y/tree/main)
+![Crates.io Version](https://img.shields.io/crates/v/rsrpp?style=flat-square)
 
 ## RuSt Research Paper Parser (rsrpp)
 
 The `rsrpp` library provides a set of tools for parsing research papers.
+
+<img src="../RSRPP.png" alt="LOGO" width="150" height="150"/>
 
 ### Quick Start
 
