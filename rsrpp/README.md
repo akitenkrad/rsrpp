@@ -7,7 +7,7 @@
 
 The `rsrpp` library provides a set of tools for parsing research papers.
 
-<img src="../RSRPP.png" alt="LOGO" width="150" height="150"/>
+<img src="../LOGO.png" alt="LOGO" width="150" height="150"/>
 
 ### Quick Start
 
