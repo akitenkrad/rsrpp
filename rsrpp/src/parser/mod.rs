@@ -87,7 +87,7 @@ fn save_pdf_as_figures(config: &mut ParserConfig) -> Result<()> {
     let glob_query = dst_path.parent().unwrap().join(glob_query);
 
     // wait for the command to finish
-    let mut retry_count = 10;
+    let mut retry_count = 100;
     loop {
         let count = glob(glob_query.to_str().unwrap())?.count();
         if count > 0 {
@@ -96,7 +96,7 @@ fn save_pdf_as_figures(config: &mut ParserConfig) -> Result<()> {
         if retry_count == 0 {
             return Err(Error::msg("Error: Failed to save PDF as JPEG files"));
         } else {
-            std::thread::sleep(Duration::from_millis(10));
+            std::thread::sleep(Duration::from_millis(100));
             retry_count -= 1;
         }
     }
@@ -150,7 +150,7 @@ fn save_pdf_as_xml(config: &mut ParserConfig) -> Result<()> {
         .output()?;
 
     // assert that the xml file exists
-    let mut retry_count = 10;
+    let mut retry_count = 100;
     loop {
         if xml_path.exists() {
             break;
@@ -158,7 +158,7 @@ fn save_pdf_as_xml(config: &mut ParserConfig) -> Result<()> {
         if retry_count == 0 {
             return Err(Error::msg("Error: Failed to save PDF as XML file"));
         } else {
-            std::thread::sleep(Duration::from_millis(10));
+            std::thread::sleep(Duration::from_millis(100));
             retry_count -= 1;
         }
     }
@@ -282,14 +282,14 @@ fn save_pdf_as_text(config: &mut ParserConfig) -> Result<()> {
         .output()?;
 
     // assert that the text file exists
-    let mut retry_count = 10;
+    let mut retry_count = 100;
     loop {
         if html_path.exists() {
             break;
         } else if retry_count == 0 {
             return Err(Error::msg("Error: Failed to save PDF as text file"));
         } else {
-            std::thread::sleep(Duration::from_millis(10));
+            std::thread::sleep(Duration::from_millis(100));
             retry_count -= 1;
         }
     }
