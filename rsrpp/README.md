@@ -55,15 +55,31 @@ License: MIT
 
 ## Releases
 
-### 1.0.4
+<details open>
+<summary>1.0.7</summary>
+
+- Fix bugs: After converting to PDF, the program now waits until processing is complete.
+
+</details>
+
+<details>
+<summary>1.0.4</summary>
 
 - Fixed bugs in `get_pdf_info`.
 - Made minor improvements.
 
-### 1.0.3
+</details>
+
+<details>
+<summary>1.0.3</summary>
 
 - Added cli -> [rsrpp-cli](https://crates.io/crates/rsrpp-cli).
 
-### 1.0.2
+</details>
+
+<details>
+<summary>1.0.2</summary>
 
 - Updated the `Section` module. `content: String` was replaced by `content: Vec<TextBlock>`.
+
+</details>

@@ -15,6 +15,7 @@ use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 use std::process::Stdio;
+use std::time::Duration;
 
 #[cfg(test)]
 mod tests;
@@ -84,6 +85,23 @@ fn save_pdf_as_figures(config: &mut ParserConfig) -> Result<()> {
     // get all jpeg files
     let glob_query = dst_path.file_name().unwrap().to_str().unwrap().to_string() + "*.jpg";
     let glob_query = dst_path.parent().unwrap().join(glob_query);
+
+    // wait for the command to finish
+    let mut retry_count = 10;
+    loop {
+        let count = glob(glob_query.to_str().unwrap())?.count();
+        if count > 0 {
+            break;
+        }
+        if retry_count == 0 {
+            return Err(Error::msg("Error: Failed to save PDF as JPEG files"));
+        } else {
+            std::thread::sleep(Duration::from_millis(10));
+            retry_count -= 1;
+        }
+    }
+
+    // get all jpeg files
     for entry in glob(glob_query.to_str().unwrap())? {
         match entry {
             Ok(path) => {
@@ -130,6 +148,20 @@ fn save_pdf_as_xml(config: &mut ParserConfig) -> Result<()> {
         ])
         .stdout(Stdio::piped())
         .output()?;
+
+    // assert that the xml file exists
+    let mut retry_count = 10;
+    loop {
+        if xml_path.exists() {
+            break;
+        }
+        if retry_count == 0 {
+            return Err(Error::msg("Error: Failed to save PDF as XML file"));
+        } else {
+            std::thread::sleep(Duration::from_millis(10));
+            retry_count -= 1;
+        }
+    }
 
     // get title font size
     let mut font_number = 0;
@@ -249,6 +281,18 @@ fn save_pdf_as_text(config: &mut ParserConfig) -> Result<()> {
         .stdout(Stdio::piped())
         .output()?;
 
+    // assert that the text file exists
+    let mut retry_count = 10;
+    loop {
+        if html_path.exists() {
+            break;
+        } else if retry_count == 0 {
+            return Err(Error::msg("Error: Failed to save PDF as text file"));
+        } else {
+            std::thread::sleep(Duration::from_millis(10));
+            retry_count -= 1;
+        }
+    }
     return Ok(());
 }
 
