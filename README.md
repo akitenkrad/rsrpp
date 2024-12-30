@@ -56,13 +56,20 @@ License: MIT
 ## Releases
 
 <details open>
-<summary>1.0.8</summary>
+<summary>1.0.9</summary>
 
-- Update: The max retry time for saving PDF files has been increased.
+- Updated: implemented new errors to handle invalid URLs.
 
 </details>
 
-<details open>
+<details>
+<summary>1.0.8</summary>
+
+- Updated: The max retry time for saving PDF files has been increased.
+
+</details>
+
+<details>
 <summary>1.0.7</summary>
 
 - Fix bugs: After converting to PDF, the program now waits until processing is complete.

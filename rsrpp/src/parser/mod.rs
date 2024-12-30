@@ -35,6 +35,13 @@ fn get_pdf_info(config: &mut ParserConfig) -> Result<()> {
     let res =
         Command::new("pdfinfo").args(&[config.pdf_path.clone()]).stdout(Stdio::piped()).output();
     let text = String::from_utf8(res?.stdout)?;
+
+    println!("from get_pdf_info: {}", text);
+    //Syntax Error: Document stream is empty
+    if text.is_empty() {
+        return Err(Error::msg("Error: pdf file is broken or invalid url"));
+    }
+
     for line in text.split("\n") {
         let parts: Vec<&str> = line.split(":").collect();
         if parts.len() < 2 {
@@ -319,16 +326,16 @@ async fn save_pdf(path_or_url: &str, config: &mut ParserConfig) -> Result<()> {
     }
 
     // get pdf info
-    get_pdf_info(config).unwrap();
+    get_pdf_info(config)?;
 
     // save pdf as jpeg files
-    save_pdf_as_figures(config).unwrap();
+    save_pdf_as_figures(config)?;
 
     // save pdf as html
-    save_pdf_as_xml(config).unwrap();
+    save_pdf_as_xml(config)?;
 
     // save pdf as text
-    save_pdf_as_text(config).unwrap();
+    save_pdf_as_text(config)?;
 
     return Ok(());
 }

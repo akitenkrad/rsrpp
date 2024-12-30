@@ -56,9 +56,16 @@ License: MIT
 ## Releases
 
 <details open>
+<summary>1.0.9</summary>
+
+- Updated: implemented new errors to handle invalid URLs.
+
+</details>
+
+<details>
 <summary>1.0.8</summary>
 
-- Update: The max retry time for saving PDF files has been increased.
+- Updated: The max retry time for saving PDF files has been increased.
 
 </details>
 

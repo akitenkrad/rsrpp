@@ -1,6 +1,22 @@
 use super::*;
 
 #[tokio::test]
+async fn test_invalid_pdf_url() {
+    let mut config = ParserConfig::new();
+    let url = "https://www.semanticscholar.org/reader/204e3073870fae3d05bcbc2f6a8e263d9b72e776";
+    // let url = "https://arxiv.org/pdf/2308.10379";
+    let res = save_pdf(url, &mut config).await;
+
+    match res {
+        Ok(_) => assert!(false),
+        Err(e) => {
+            println!("{}", e);
+            assert!(true);
+        }
+    }
+}
+
+#[tokio::test]
 async fn test_save_pdf_1() {
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/1706.03762";
