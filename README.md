@@ -56,6 +56,13 @@ License: MIT
 ## Releases
 
 <details open>
+<summary>1.0.11</summary>
+
+- Fixed a bug in xml loop to finish when the file reaches to end.
+
+</details>
+
+<details>
 <summary>1.0.10</summary>
 
 - Added verbose mode.

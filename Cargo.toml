@@ -3,7 +3,7 @@ resolver = "2"
 members = ["rsrpp", "rsrpp-cli"]
 
 [workspace.package]
-version = "1.0.10"
+version = "1.0.11"
 authors = ["akitenkrad"]
 edition = "2021"
 description = "A Rust project for research paper pdf."
