@@ -295,7 +295,6 @@ fn save_pdf_as_xml(
             }
             Ok(Event::Text(e)) => {
                 let text = String::from_utf8_lossy(e.as_ref());
-                println!("{}", text);
                 if regex_is_number.is_match(&text) {
                     continue;
                 }
