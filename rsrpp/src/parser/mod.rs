@@ -224,6 +224,9 @@ fn save_pdf_as_xml(
                     break;
                 }
             }
+            Ok(Event::Eof) => {
+                break;
+            }
             Err(_e) => {
                 break;
             }
@@ -292,6 +295,7 @@ fn save_pdf_as_xml(
             }
             Ok(Event::Text(e)) => {
                 let text = String::from_utf8_lossy(e.as_ref());
+                println!("{}", text);
                 if regex_is_number.is_match(&text) {
                     continue;
                 }
@@ -302,6 +306,9 @@ fn save_pdf_as_xml(
                         break;
                     }
                 }
+            }
+            Ok(Event::Eof) => {
+                break;
             }
             Err(_e) => {
                 break;
