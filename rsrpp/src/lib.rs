@@ -31,8 +31,9 @@
 //! # use rsrpp::parser::{parse, pages2json};
 //! # async fn try_main() -> Result<(), String> {
 //! let mut config = ParserConfig::new();
+//! let verbose = true;
 //! let url = "https://arxiv.org/pdf/1706.03762";
-//! let pages = parse(url, &mut config).await.unwrap(); // Vec<Page>
+//! let pages = parse(url, &mut config, verbose).await.unwrap(); // Vec<Page>
 //! let sections = Section::from_pages(&pages); // Vec<Section>
 //! let json = serde_json::to_string(&sections).unwrap(); // String
 //! # Ok(())

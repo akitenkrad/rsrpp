@@ -1,6 +1,7 @@
 use crate::parser::structs::*;
 use anyhow::{Error, Result};
 use glob::glob;
+use indicatif::ProgressBar;
 use opencv::core::{Vec4f, Vector};
 use opencv::imgcodecs;
 use opencv::imgproc;
@@ -31,12 +32,11 @@ pub mod structs;
 /// # Returns
 ///
 /// A `Result` which is `Ok` if the information was successfully retrieved, or an `Err` if an error occurred.
-fn get_pdf_info(config: &mut ParserConfig) -> Result<()> {
+fn get_pdf_info(config: &mut ParserConfig, verbose: bool, time: std::time::Instant) -> Result<()> {
     let res =
         Command::new("pdfinfo").args(&[config.pdf_path.clone()]).stdout(Stdio::piped()).output();
     let text = String::from_utf8(res?.stdout)?;
 
-    println!("from get_pdf_info: {}", text);
     //Syntax Error: Document stream is empty
     if text.is_empty() {
         return Err(Error::msg("Error: pdf file is broken or invalid url"));
@@ -58,6 +58,10 @@ fn get_pdf_info(config: &mut ParserConfig) -> Result<()> {
         }
         config.pdf_info.insert(key, value);
     }
+
+    if verbose {
+        println!("Extracted PDF Info in {:.2}s", time.elapsed().as_secs());
+    }
     return Ok(());
 }
 
@@ -70,7 +74,11 @@ fn get_pdf_info(config: &mut ParserConfig) -> Result<()> {
 /// # Returns
 ///
 /// A `Result` which is `Ok` if the pages were successfully saved as JPEG files, or an `Err` if an error occurred.
-fn save_pdf_as_figures(config: &mut ParserConfig) -> Result<()> {
+fn save_pdf_as_figures(
+    config: &mut ParserConfig,
+    verbose: bool,
+    time: std::time::Instant,
+) -> Result<()> {
     let pdf_path = Path::new(config.pdf_path.as_str());
     let dst_path = pdf_path.parent().unwrap().join(pdf_path.file_stem().unwrap().to_str().unwrap());
 
@@ -127,6 +135,13 @@ fn save_pdf_as_figures(config: &mut ParserConfig) -> Result<()> {
         }
     }
 
+    if verbose {
+        println!(
+            "Converted PDF as figures in {:.2}s",
+            time.elapsed().as_secs()
+        );
+    }
+
     return Ok(());
 }
 
@@ -139,7 +154,11 @@ fn save_pdf_as_figures(config: &mut ParserConfig) -> Result<()> {
 /// # Returns
 ///
 /// A `Result` which is `Ok` if the content was successfully saved as an XML file, or an `Err` if an error occurred.
-fn save_pdf_as_xml(config: &mut ParserConfig) -> Result<()> {
+fn save_pdf_as_xml(
+    config: &mut ParserConfig,
+    verbose: bool,
+    time: std::time::Instant,
+) -> Result<()> {
     let xml_path = Path::new(&config.pdf_xml_path);
 
     Command::new("pdftohtml")
@@ -157,7 +176,7 @@ fn save_pdf_as_xml(config: &mut ParserConfig) -> Result<()> {
         .output()?;
 
     // assert that the xml file exists
-    let mut retry_count = 100;
+    let mut retry_count = 300;
     loop {
         if xml_path.exists() {
             break;
@@ -165,8 +184,12 @@ fn save_pdf_as_xml(config: &mut ParserConfig) -> Result<()> {
         if retry_count == 0 {
             return Err(Error::msg("Error: Failed to save PDF as XML file"));
         } else {
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_secs(1));
             retry_count -= 1;
+
+            if verbose {
+                println!("Waiting for XML file... {}", retry_count);
+            }
         }
     }
 
@@ -190,7 +213,14 @@ fn save_pdf_as_xml(config: &mut ParserConfig) -> Result<()> {
                 }
             }
             Ok(Event::Text(e)) => {
-                if String::from_utf8_lossy(e.as_ref()).to_lowercase() == "abstract" {
+                if String::from_utf8_lossy(e.as_ref()).to_lowercase() == "abstract"
+                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "introduction"
+                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "related work"
+                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "related works"
+                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "experiments"
+                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "conclusion"
+                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "references"
+                {
                     break;
                 }
             }
@@ -201,7 +231,28 @@ fn save_pdf_as_xml(config: &mut ParserConfig) -> Result<()> {
         }
     }
 
+    if verbose {
+        println!(
+            "Extracted Title Font Size in {:.2}s",
+            time.elapsed().as_secs()
+        );
+    }
+
     // get sections
+    let pb: Option<ProgressBar> = if verbose {
+        let bar = ProgressBar::new(
+            config.pdf_info.get("pages").unwrap_or(&String::from("0")).parse::<u64>().unwrap(),
+        );
+        bar.set_style(
+            indicatif::ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] {bar:40.green/blue} {pos:>7}/{len:7} {msg}")
+                .unwrap()
+                .progress_chars("█▓▒░"),
+        );
+        Some(bar)
+    } else {
+        None
+    };
     let mut page_number = 0;
     let mut is_title = false;
     let regex_is_number = regex::Regex::new(r"^\d+$").unwrap();
@@ -259,6 +310,14 @@ fn save_pdf_as_xml(config: &mut ParserConfig) -> Result<()> {
         }
     }
 
+    if let Some(pb) = pb {
+        pb.finish_and_clear();
+    }
+
+    if verbose {
+        println!("Converted PDf into XML in {:.2}s", time.elapsed().as_secs());
+    }
+
     return Ok(());
 }
 
@@ -271,7 +330,11 @@ fn save_pdf_as_xml(config: &mut ParserConfig) -> Result<()> {
 /// # Returns
 ///
 /// A `Result` which is `Ok` if the content was successfully saved as a text file, or an `Err` if an error occurred.
-fn save_pdf_as_text(config: &mut ParserConfig) -> Result<()> {
+fn save_pdf_as_text(
+    config: &mut ParserConfig,
+    verbose: bool,
+    time: std::time::Instant,
+) -> Result<()> {
     let html_path = Path::new(config.pdf_text_path.as_str());
 
     // parse pdf into html
@@ -289,17 +352,29 @@ fn save_pdf_as_text(config: &mut ParserConfig) -> Result<()> {
         .output()?;
 
     // assert that the text file exists
-    let mut retry_count = 100;
+    let mut retry_count = 300;
     loop {
         if html_path.exists() {
             break;
         } else if retry_count == 0 {
             return Err(Error::msg("Error: Failed to save PDF as text file"));
         } else {
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_secs(1));
             retry_count -= 1;
+
+            if verbose {
+                println!("Waiting for text file... {}", retry_count);
+            }
         }
     }
+
+    if verbose {
+        println!(
+            "Converted PDF into Text in {:.2}s",
+            time.elapsed().as_secs()
+        );
+    }
+
     return Ok(());
 }
 
@@ -313,7 +388,12 @@ fn save_pdf_as_text(config: &mut ParserConfig) -> Result<()> {
 /// # Returns
 ///
 /// An `async` `Result` which is `Ok` if the PDF was successfully saved, or an `Err` if an error occurred.
-async fn save_pdf(path_or_url: &str, config: &mut ParserConfig) -> Result<()> {
+async fn save_pdf(
+    path_or_url: &str,
+    config: &mut ParserConfig,
+    verbose: bool,
+    time: std::time::Instant,
+) -> Result<()> {
     let save_path = config.pdf_path.as_str();
     if path_or_url.starts_with("http") {
         let res = request::get(path_or_url).await;
@@ -326,16 +406,16 @@ async fn save_pdf(path_or_url: &str, config: &mut ParserConfig) -> Result<()> {
     }
 
     // get pdf info
-    get_pdf_info(config)?;
+    get_pdf_info(config, verbose, time)?;
 
     // save pdf as jpeg files
-    save_pdf_as_figures(config)?;
+    save_pdf_as_figures(config, verbose, time)?;
 
     // save pdf as html
-    save_pdf_as_xml(config)?;
+    save_pdf_as_xml(config, verbose, time)?;
 
     // save pdf as text
-    save_pdf_as_text(config)?;
+    save_pdf_as_text(config, verbose, time)?;
 
     return Ok(());
 }
@@ -350,8 +430,13 @@ async fn save_pdf(path_or_url: &str, config: &mut ParserConfig) -> Result<()> {
 /// # Returns
 ///
 /// An `async` `Result` containing an `html::Html` instance if the conversion was successful, or an `Err` if an error occurred.
-async fn pdf2html(path_or_url: &str, config: &mut ParserConfig) -> Result<html::Html> {
-    save_pdf(path_or_url, config).await?;
+async fn pdf2html(
+    path_or_url: &str,
+    config: &mut ParserConfig,
+    verbose: bool,
+    time: std::time::Instant,
+) -> Result<html::Html> {
+    save_pdf(path_or_url, config, verbose, time).await?;
 
     let html_path = Path::new(config.pdf_text_path.as_str());
 
@@ -689,20 +774,55 @@ fn parse_extract_secsions(config: &mut ParserConfig, pages: &mut Vec<Page>) -> R
 /// # Returns
 ///
 /// An `async` `Result` containing a vector of `Page` instances if the parsing was successful, or an `Err` if an error occurred.
-pub async fn parse(path_or_url: &str, config: &mut ParserConfig) -> Result<Vec<Page>> {
-    let html = pdf2html(path_or_url, config).await?;
+pub async fn parse(
+    path_or_url: &str,
+    config: &mut ParserConfig,
+    verbose: bool,
+) -> Result<Vec<Page>> {
+    let time = std::time::Instant::now();
+    if verbose {
+        println!("Parsing PDF...");
+    }
+
+    let html = pdf2html(path_or_url, config, verbose, time).await?;
+    if verbose {
+        println!(
+            "Converted PDF into HTML in {:.2}s",
+            time.elapsed().as_secs()
+        );
+    }
 
     // parse html into pages
     let mut pages = parse_html2pages(config, html)?;
+    if verbose {
+        println!(
+            "Parsed HTML into Pages in {:.2}s, found {} pages",
+            time.elapsed().as_secs(),
+            pages.len()
+        );
+    }
 
     // compare text area and blocks
     parse_extract_textarea(config, &mut pages)?;
+    if verbose {
+        println!("Extracted Text Area in {:.2}s", time.elapsed().as_secs(),);
+    }
 
     // adjust columns
     adjst_columns(&mut pages, config);
+    if verbose {
+        println!("Adjusted Columns in {:.2}s", time.elapsed().as_secs(),);
+    }
 
     // set section for each block
     parse_extract_secsions(config, &mut pages)?;
+    if verbose {
+        println!("Extracted Sections in {:.2}s", time.elapsed().as_secs(),);
+    }
+
+    if verbose {
+        println!("Finished Parsing in {:.2}s", time.elapsed().as_secs());
+    }
 
     return Ok(pages);
 }

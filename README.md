@@ -56,6 +56,14 @@ License: MIT
 ## Releases
 
 <details open>
+<summary>1.0.10</summary>
+
+- Added verbose mode.
+- Fixed a bug in the process extracting page number.
+
+</details>
+
+<details>
 <summary>1.0.9</summary>
 
 - Updated: implemented new errors to handle invalid URLs.

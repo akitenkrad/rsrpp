@@ -2,10 +2,11 @@ use super::*;
 
 #[tokio::test]
 async fn test_invalid_pdf_url() {
+    let time = std::time::Instant::now();
     let mut config = ParserConfig::new();
     let url = "https://www.semanticscholar.org/reader/204e3073870fae3d05bcbc2f6a8e263d9b72e776";
     // let url = "https://arxiv.org/pdf/2308.10379";
-    let res = save_pdf(url, &mut config).await;
+    let res = save_pdf(url, &mut config, true, time).await;
 
     match res {
         Ok(_) => assert!(false),
@@ -18,10 +19,11 @@ async fn test_invalid_pdf_url() {
 
 #[tokio::test]
 async fn test_save_pdf_1() {
+    let time = std::time::Instant::now();
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/1706.03762";
     // let url = "https://arxiv.org/pdf/2308.10379";
-    save_pdf(url, &mut config).await.unwrap();
+    save_pdf(url, &mut config, true, time).await.unwrap();
 
     assert!(Path::new(&config.pdf_path).exists());
 
@@ -49,10 +51,11 @@ async fn test_save_pdf_1() {
 
 #[tokio::test]
 async fn test_adjust_columns() {
+    let time = std::time::Instant::now();
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/2411.19655";
 
-    let html = pdf2html(url, &mut config).await.unwrap();
+    let html = pdf2html(url, &mut config, true, time).await.unwrap();
 
     // parse html into pages
     let mut pages = parse_html2pages(&mut config, html).unwrap();
@@ -74,9 +77,10 @@ async fn test_adjust_columns() {
 
 #[tokio::test]
 async fn test_save_pdf_2() {
+    let time = std::time::Instant::now();
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/2308.10379";
-    save_pdf(url, &mut config).await.unwrap();
+    save_pdf(url, &mut config, true, time).await.unwrap();
 
     assert!(Path::new(&config.pdf_path).exists());
 
@@ -106,9 +110,10 @@ async fn test_save_pdf_2() {
 
 #[tokio::test]
 async fn test_pdf2html_url() {
+    let time = std::time::Instant::now();
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/1706.03762";
-    let res = pdf2html(url, &mut config).await;
+    let res = pdf2html(url, &mut config, true, time).await;
     let html = res.unwrap();
     assert!(html.html().contains("arXiv:1706.03762"));
     let _ = config.clean_files();
@@ -116,6 +121,7 @@ async fn test_pdf2html_url() {
 
 #[tokio::test]
 async fn test_pdf2html_file() {
+    let time = std::time::Instant::now();
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/1706.03762";
     let response = request::get(url).await.unwrap();
@@ -124,7 +130,7 @@ async fn test_pdf2html_file() {
     let mut file = File::create(path).unwrap();
     std::io::copy(&mut bytes.as_ref(), &mut file).unwrap();
 
-    let res = pdf2html("/tmp/test.pdf", &mut config).await;
+    let res = pdf2html("/tmp/test.pdf", &mut config, true, time).await;
     let html = res.unwrap();
     assert!(html.html().contains("arXiv:1706.03762"));
 
@@ -135,7 +141,7 @@ async fn test_pdf2html_file() {
 async fn test_parse_1() {
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/2308.10379";
-    let res = parse(url, &mut config).await;
+    let res = parse(url, &mut config, true).await;
     let pages = res.unwrap();
 
     assert!(pages.len() > 0);
@@ -166,7 +172,7 @@ async fn test_parse_1() {
 async fn test_parse_2() {
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/1706.03762";
-    let res = parse(url, &mut config).await;
+    let res = parse(url, &mut config, true).await;
     let pages = res.unwrap();
 
     assert!(pages.len() > 0);
@@ -197,7 +203,7 @@ async fn test_parse_2() {
 async fn test_parse_3() {
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/2410.24080";
-    let res = parse(url, &mut config).await;
+    let res = parse(url, &mut config, true).await;
     let pages = res.unwrap();
 
     assert!(pages.len() > 0);
@@ -248,7 +254,7 @@ fn test_coordinate_is_intercept() {
 async fn test_pdf_to_json_1() {
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/1706.03762";
-    let pages = parse(url, &mut config).await.unwrap();
+    let pages = parse(url, &mut config, true).await.unwrap();
     let sections = Section::from_pages(&pages);
 
     for section in sections.iter() {
@@ -270,7 +276,7 @@ async fn test_pdf_to_json_1() {
 async fn test_pdf_to_json_2() {
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/2308.10379";
-    let pages = parse(url, &mut config).await.unwrap();
+    let pages = parse(url, &mut config, true).await.unwrap();
     let sections = Section::from_pages(&pages);
 
     for section in sections.iter() {
@@ -292,7 +298,7 @@ async fn test_pdf_to_json_2() {
 async fn test_pdf_to_json_3() {
     let mut config = ParserConfig::new();
     let url = "https://arxiv.org/pdf/2410.24080";
-    let pages = parse(url, &mut config).await.unwrap();
+    let pages = parse(url, &mut config, true).await.unwrap();
     let sections = Section::from_pages(&pages);
 
     for section in sections.iter() {
