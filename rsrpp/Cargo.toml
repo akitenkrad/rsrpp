@@ -1,6 +1,6 @@
 [package]
 name = "rsrpp"
-version.workspace = true
+version = "1.0.13"
 edition.workspace = true
 authors.workspace = true
 description.workspace = true

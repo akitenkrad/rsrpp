@@ -1,6 +1,6 @@
 [package]
 name = "rsrpp-cli"
-version.workspace = true
+version = "1.0.14"
 authors.workspace = true
 edition.workspace = true
 description.workspace = true
@@ -12,7 +12,7 @@ name = "rsrpp"
 path = "src/main.rs"
 
 [dependencies]
-rsrpp = { path = "../rsrpp", version = "1.0.14" }
+rsrpp = { path = "../rsrpp", version = "1.0.13" }
 clap = { version = "4.5.21", features = ["derive"] }
 serde_json.workspace = true
 tokio.workspace = true
