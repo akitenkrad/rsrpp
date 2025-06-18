@@ -56,6 +56,13 @@ License: MIT
 ## Releases
 
 <details open>
+<summary>1.0.14</summary>
+
+- Updated `rsrpp` version for `rsrpp-cli`.
+
+</details>
+
+<details>
 <summary>1.0.13</summary>
 
 - Updated dependencies.
