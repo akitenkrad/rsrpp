@@ -62,7 +62,7 @@ License: MIT
 
 </details>
 
-<details open>
+<details>
 <summary>1.0.11</summary>
 
 - Fixed a bug in xml loop to finish when the file reaches to end.

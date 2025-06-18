@@ -1,0 +1,37 @@
+[config]
+default_to_workspace = false
+
+[tasks.build-image]
+command = "docker"
+args = ["compose", "build", "--pull", "--no-cache", "--progress=plain"]
+
+[tasks.format]
+install_crate = "rustfmt"
+command = "cargo"
+args = ["fmt", "--", "--emit=files"]
+
+[tasks.clean]
+command = "cargo"
+args = ["clean"]
+
+[tasks.build]
+command = "docker"
+args = ["compose", "run", "--rm", "instance", "cargo", "build", "--release"]
+dependencies = ["build-image", "clean"]
+
+[tasks.test]
+dependencies = ["build-image"]
+command = "docker"
+args = [
+    "compose",
+    "run",
+    "--rm",
+    "instance",
+    "cargo",
+    "nextest",
+    "run",
+    "--workspace",
+    "--status-level",
+    "all",
+    "--test-threads=1",
+]

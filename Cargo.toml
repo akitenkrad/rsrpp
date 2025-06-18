@@ -3,7 +3,7 @@ resolver = "2"
 members = ["rsrpp", "rsrpp-cli"]
 
 [workspace.package]
-version = "1.0.12"
+version = "1.0.13"
 authors = ["akitenkrad"]
 edition = "2021"
 description = "A Rust project for research paper pdf."
@@ -11,7 +11,7 @@ repository = "https://github.com/akitenkrad/rsrpp.git"
 license = "MIT"
 
 [workspace.dependencies]
-rsrpp = { path = "./rsrpp", version = "1.0.2" }
+rsrpp = { path = "./rsrpp" }
 anyhow = "1.0.95"
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.134"

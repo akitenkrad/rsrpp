@@ -1,9 +1,9 @@
-# Rust Research Paper Parser (rsrpp)
+# Rust Research Paper Parser (rs-rpp)
 
 [![CircleCI](https://dl.circleci.com/status-badge/img/circleci/X1fiE4koKU88Z9sKwWoPAH/S2NQ8VZz6F1CZ6vuvFBE3Y/tree/main.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/circleci/X1fiE4koKU88Z9sKwWoPAH/S2NQ8VZz6F1CZ6vuvFBE3Y/tree/main)
 ![Crates.io Version](https://img.shields.io/crates/v/rsrpp?style=flat-square)
 
-## RuSt Research Paper Parser (rsrpp)
+## RuSt Research Paper Parser (rs-rpp)
 
 The `rsrpp` library provides a set of tools for parsing research papers.
 
@@ -56,6 +56,14 @@ License: MIT
 ## Releases
 
 <details open>
+<summary>1.0.13</summary>
+
+- Updated dependencies.
+- removed build.sh because it requires sudo when installing the crate.
+
+</details>
+
+<details>
 <summary>1.0.12</summary>
 
 - Fixed a bug: remove unused `println!`.

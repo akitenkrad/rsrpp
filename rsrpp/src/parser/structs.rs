@@ -49,8 +49,8 @@ impl ParserConfig {
     ///
     /// A new `ParserConfig` instance with the initialized fields.
     pub fn new() -> ParserConfig {
-        let mut rng = rand::thread_rng();
-        let random_value = rng.gen_range(10000..99999);
+        let mut rng = rand::rng();
+        let random_value = rng.random_range(10000..99999);
         let mut pdf_path = String::new();
         pdf_path.push_str("/tmp/pdf_");
         pdf_path.push_str(&random_value.to_string());
