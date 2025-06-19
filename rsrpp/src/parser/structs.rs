@@ -317,7 +317,7 @@ pub struct Page {
     pub width: f32,
     pub height: f32,
     pub tables: Vec<Coordinate>,
-    pub page_nubmer: PageNumber,
+    pub page_number: PageNumber,
     pub number_of_columns: i8,
 }
 
@@ -339,7 +339,7 @@ impl Page {
             width: width,
             height: height,
             tables: Vec::new(),
-            page_nubmer: page_number,
+            page_number,
             number_of_columns: 1,
         }
     }

@@ -56,6 +56,14 @@ License: MIT
 ## Releases
 
 <details open>
+<summary>1.0.15</summary>
+
+- fixed typo.
+- introdeced `tracing` logger.
+
+</details>
+
+<details>
 <summary>1.0.14</summary>
 
 - Updated `rsrpp` version for `rsrpp-cli`.

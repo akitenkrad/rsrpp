@@ -1,6 +1,6 @@
 [package]
 name = "rsrpp-cli"
-version = "1.0.14"
+version.workspace = true
 authors.workspace = true
 edition.workspace = true
 description.workspace = true

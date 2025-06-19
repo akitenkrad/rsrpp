@@ -1,3 +1,7 @@
+pub mod loggers;
+pub mod structs;
+
+use crate::parser::loggers::init_logger;
 use crate::parser::structs::*;
 use anyhow::{Error, Result};
 use glob::glob;
@@ -20,8 +24,6 @@ use std::time::Duration;
 
 #[cfg(test)]
 mod tests;
-
-pub mod structs;
 
 /// Retrieves information about a PDF document using the `pdfinfo` command.
 ///
@@ -596,7 +598,7 @@ fn adjst_columns(pages: &mut Vec<Page>, config: &ParserConfig) {
     let last_page = config.sections.iter().map(|(page_number, _)| page_number).max().unwrap();
     let avg_line_width = pages
         .iter()
-        .filter(|page| page.page_nubmer <= *last_page)
+        .filter(|page| page.page_number <= *last_page)
         .map(|page| {
             page.blocks
                 .iter()
@@ -787,12 +789,13 @@ pub async fn parse(
 ) -> Result<Vec<Page>> {
     let time = std::time::Instant::now();
     if verbose {
-        println!("Parsing PDF...");
+        init_logger()?;
+        tracing::info!("Parsing PDF: {}", path_or_url);
     }
 
     let html = pdf2html(path_or_url, config, verbose, time).await?;
     if verbose {
-        println!(
+        tracing::info!(
             "Converted PDF into HTML in {:.2}s",
             time.elapsed().as_secs()
         );
@@ -801,7 +804,7 @@ pub async fn parse(
     // parse html into pages
     let mut pages = parse_html2pages(config, html)?;
     if verbose {
-        println!(
+        tracing::info!(
             "Parsed HTML into Pages in {:.2}s, found {} pages",
             time.elapsed().as_secs(),
             pages.len()
@@ -811,23 +814,23 @@ pub async fn parse(
     // compare text area and blocks
     parse_extract_textarea(config, &mut pages)?;
     if verbose {
-        println!("Extracted Text Area in {:.2}s", time.elapsed().as_secs(),);
+        tracing::info!("Extracted Text Area in {:.2}s", time.elapsed().as_secs());
     }
 
     // adjust columns
     adjst_columns(&mut pages, config);
     if verbose {
-        println!("Adjusted Columns in {:.2}s", time.elapsed().as_secs(),);
+        tracing::info!("Adjusted Columns in {:.2}s", time.elapsed().as_secs());
     }
 
     // set section for each block
     parse_extract_secsions(config, &mut pages)?;
     if verbose {
-        println!("Extracted Sections in {:.2}s", time.elapsed().as_secs(),);
+        tracing::info!("Extracted Sections in {:.2}s", time.elapsed().as_secs());
     }
 
     if verbose {
-        println!("Finished Parsing in {:.2}s", time.elapsed().as_secs());
+        tracing::info!("Finished Parsing in {:.2}s", time.elapsed().as_secs());
     }
 
     return Ok(pages);

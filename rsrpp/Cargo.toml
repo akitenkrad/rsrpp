@@ -1,6 +1,6 @@
 [package]
 name = "rsrpp"
-version = "1.0.13"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 description.workspace = true
@@ -23,6 +23,8 @@ scraper = "0.23.0"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 
 [package.metadata.release]
 tag = false

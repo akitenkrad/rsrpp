@@ -11,7 +11,7 @@ async fn test_invalid_pdf_url() {
     match res {
         Ok(_) => assert!(false),
         Err(e) => {
-            println!("{}", e);
+            tracing::info!("{}", e);
             assert!(true);
         }
     }
@@ -28,7 +28,7 @@ async fn test_save_pdf_1() {
     assert!(Path::new(&config.pdf_path).exists());
 
     for (_, path) in config.pdf_figures.iter() {
-        println!("path: {}", path);
+        tracing::info!("path: {}", path);
         assert!(Path::new(path).exists());
     }
 
@@ -43,7 +43,7 @@ async fn test_save_pdf_1() {
     assert_eq!(config.sections[8], (10, "References".to_string()));
 
     for (page, section) in config.sections.iter() {
-        println!("page: {}, section: {}", page, section);
+        tracing::info!("page: {}, section: {}", page, section);
     }
 
     let _ = config.clean_files();
@@ -66,10 +66,10 @@ async fn test_adjust_columns() {
     // adjust columns
     adjst_columns(&mut pages, &mut config);
 
-    println!("{}", &pages[0].number_of_columns);
+    tracing::info!("{}", &pages[0].number_of_columns);
     let sections = Section::from_pages(&pages);
     for section in sections.iter() {
-        println!("{}: {}", section.title, section.get_text());
+        tracing::info!("{}: {}", section.title, section.get_text());
     }
 
     assert_eq!(pages[0].number_of_columns, 2);
@@ -85,7 +85,7 @@ async fn test_save_pdf_2() {
     assert!(Path::new(&config.pdf_path).exists());
 
     for (_, path) in config.pdf_figures.iter() {
-        println!("path: {}", path);
+        tracing::info!("path: {}", path);
         assert!(Path::new(path).exists());
     }
 
@@ -102,7 +102,7 @@ async fn test_save_pdf_2() {
     assert_eq!(config.sections[10], (10, "References".to_string()));
 
     for (page, section) in config.sections.iter() {
-        println!("page: {}, section: {}", page, section);
+        tracing::info!("page: {}, section: {}", page, section);
     }
 
     let _ = config.clean_files();
@@ -144,16 +144,18 @@ async fn test_parse_1() {
     let res = parse(url, &mut config, true).await;
     let pages = res.unwrap();
 
-    assert!(pages.len() > 0);
+    assert!(pages.len() > 0, "No pages found");
 
     for page in pages {
-        println!(
+        tracing::info!(
             "page: {}: ({}, {})",
-            page.page_nubmer, page.width, page.height
+            page.page_number,
+            page.width,
+            page.height
         );
         for block in &page.blocks {
             let block_coord = Coordinate::from_object(block.x, block.y, block.width, block.height);
-            println!(
+            tracing::info!(
                 "    {} [({},{})x({},{})]:{}",
                 block.section,
                 block_coord.top_left.x as i32,
@@ -178,13 +180,15 @@ async fn test_parse_2() {
     assert!(pages.len() > 0);
 
     for page in pages {
-        println!(
+        tracing::info!(
             "page: {}: ({}, {})",
-            page.page_nubmer, page.width, page.height
+            page.page_number,
+            page.width,
+            page.height
         );
         for block in &page.blocks {
             let block_coord = Coordinate::from_object(block.x, block.y, block.width, block.height);
-            println!(
+            tracing::info!(
                 "    {} [({},{})x({},{})]:{}",
                 block.section,
                 block_coord.top_left.x as i32,
@@ -206,16 +210,18 @@ async fn test_parse_3() {
     let res = parse(url, &mut config, true).await;
     let pages = res.unwrap();
 
-    assert!(pages.len() > 0);
+    assert!(pages.len() > 0, "No pages found");
 
     for page in pages {
-        println!(
+        tracing::info!(
             "page: {}: ({}, {})",
-            page.page_nubmer, page.width, page.height
+            page.page_number,
+            page.width,
+            page.height
         );
         for block in &page.blocks {
             let block_coord = Coordinate::from_object(block.x, block.y, block.width, block.height);
-            println!(
+            tracing::info!(
                 "    {} [({},{})x({},{})]:{}",
                 block.section,
                 block_coord.top_left.x as i32,
@@ -260,15 +266,15 @@ async fn test_pdf_to_json_1() {
     for section in sections.iter() {
         assert!(section.title.len() > 0);
         assert!(section.contents.len() > 0);
-        println!("{}: {}", section.title, section.get_text());
+        tracing::info!("{}: {}", section.title, section.get_text());
     }
 
     let json = serde_json::to_string(&sections).unwrap();
-    println!("{}", json);
+    tracing::info!("{}", json);
     assert!(json.len() > 0);
 
     let json = pages2json(&pages);
-    println!("{}", json);
+    tracing::info!("{}", json);
     assert!(json.len() > 0);
 }
 
@@ -282,15 +288,15 @@ async fn test_pdf_to_json_2() {
     for section in sections.iter() {
         assert!(section.title.len() > 0);
         assert!(section.contents.len() > 0);
-        println!("{}: {}", section.title, section.get_text());
+        tracing::info!("{}: {}", section.title, section.get_text());
     }
 
     let json = serde_json::to_string(&sections).unwrap();
-    println!("{}", json);
+    tracing::info!("{}", json);
     assert!(json.len() > 0);
 
     let json = pages2json(&pages);
-    println!("{}", json);
+    tracing::info!("{}", json);
     assert!(json.len() > 0);
 }
 
@@ -304,14 +310,14 @@ async fn test_pdf_to_json_3() {
     for section in sections.iter() {
         assert!(section.title.len() > 0);
         assert!(section.contents.len() > 0);
-        println!("{}: {}", section.title, section.get_text());
+        tracing::info!("{}: {}", section.title, section.get_text());
     }
 
     let json = serde_json::to_string(&sections).unwrap();
-    println!("{}", json);
+    tracing::info!("{}", json);
     assert!(json.len() > 0);
 
     let json = pages2json(&pages);
-    println!("{}", json);
+    tracing::info!("{}", json);
     assert!(json.len() > 0);
 }
