@@ -56,6 +56,36 @@ License: MIT
 ## Releases
 
 <details open>
+<summary>1.0.16</summary>
+
+- removed `init_logger` form `rsrpp`.
+
+</details>
+
+<details>
+<summary>1.0.15</summary>
+
+- fixed typo.
+- introdeced `tracing` logger.
+
+</details>
+
+<details>
+<summary>1.0.14</summary>
+
+- Updated `rsrpp` version for `rsrpp-cli`.
+
+</details>
+
+<details>
+<summary>1.0.13</summary>
+
+- Updated dependencies.
+- removed build.sh because it requires sudo when installing the crate.
+
+</details>
+
+<details>
 <summary>1.0.12</summary>
 
 - Fixed a bug: remove unused `println!`.

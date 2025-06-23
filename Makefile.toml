@@ -20,7 +20,7 @@ args = ["compose", "run", "--rm", "instance", "cargo", "build", "--release"]
 dependencies = ["build-image", "clean"]
 
 [tasks.test]
-dependencies = ["build-image"]
+dependencies = ["build"]
 command = "docker"
 args = [
     "compose",

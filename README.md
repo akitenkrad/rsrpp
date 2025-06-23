@@ -56,6 +56,13 @@ License: MIT
 ## Releases
 
 <details open>
+<summary>1.0.16</summary>
+
+- removed `init_logger` form `rsrpp`.
+
+</details>
+
+<details>
 <summary>1.0.15</summary>
 
 - fixed typo.

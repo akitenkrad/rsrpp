@@ -37,13 +37,27 @@ Options:
 ## Releases
 
 <details open>
-<summary>1.0.12</summary>
+<summary>1.0.16</summary>
 
-- Fixed a bug: remove unused `println!`.
+- removed `init_logger` form `rsrpp`.
 
 </details>
 
 <details>
+<summary>1.0.15</summary>
+
+- fixed typo.
+- introdeced `tracing` logger.
+
+</details>
+
+<details>
+<summary>1.0.14</summary>
+
+- Updated `rsrpp` version for `rsrpp-cli`.
+
+</details>
+
 <summary>1.0.11</summary>
 
 - Fixed a bug in xml loop to finish when the file reaches to end.

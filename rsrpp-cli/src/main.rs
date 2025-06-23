@@ -1,3 +1,6 @@
+pub mod loggers;
+
+use crate::loggers::init_logger;
 use clap::Parser;
 use rsrpp::parser::parse;
 use rsrpp::parser::structs::{ParserConfig, Section};
@@ -18,6 +21,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    init_logger().expect("Failed to initialize logger");
     let args = Args::parse();
 
     let is_url = args.pdf.starts_with("http");

@@ -1,7 +1,5 @@
-pub mod loggers;
 pub mod structs;
 
-use crate::parser::loggers::init_logger;
 use crate::parser::structs::*;
 use anyhow::{Error, Result};
 use glob::glob;
@@ -789,7 +787,6 @@ pub async fn parse(
 ) -> Result<Vec<Page>> {
     let time = std::time::Instant::now();
     if verbose {
-        init_logger()?;
         tracing::info!("Parsing PDF: {}", path_or_url);
     }
 
