@@ -2,8 +2,7 @@ pub mod loggers;
 
 use crate::loggers::init_logger;
 use clap::Parser;
-use rsrpp::parser::parse;
-use rsrpp::parser::structs::{ParserConfig, Section};
+use rsrpp::{config::ParserConfig, models::Section, parser::parse};
 use std::path::Path;
 
 #[derive(Parser, Debug)]
@@ -26,7 +25,7 @@ async fn main() {
 
     let is_url = args.pdf.starts_with("http");
     if !is_url && !Path::new(args.pdf.as_str()).exists() {
-        eprintln!("File not found: {}", args.pdf);
+        tracing::error!("File not found: {}", args.pdf);
         std::process::exit(-1);
     }
 

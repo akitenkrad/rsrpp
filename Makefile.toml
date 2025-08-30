@@ -1,7 +1,7 @@
 [config]
 default_to_workspace = false
 
-[tasks.build-image]
+[tasks.build-no-cache]
 command = "docker"
 args = ["compose", "build", "--pull", "--no-cache", "--progress=plain"]
 
@@ -14,24 +14,12 @@ args = ["fmt", "--", "--emit=files"]
 command = "cargo"
 args = ["clean"]
 
-[tasks.build]
+[tasks.build-all]
 command = "docker"
-args = ["compose", "run", "--rm", "instance", "cargo", "build", "--release"]
-dependencies = ["build-image", "clean"]
+args = ["compose", "build"]
 
-[tasks.test]
-dependencies = ["build"]
-command = "docker"
-args = [
-    "compose",
-    "run",
-    "--rm",
-    "instance",
-    "cargo",
-    "nextest",
-    "run",
-    "--workspace",
-    "--status-level",
-    "all",
-    "--test-threads=1",
-]
+[tasks.nextest]
+dependencies = ["build-all"]
+script = """
+docker compose run --rm --entrypoint "" rsrpp cargo nextest run --workspace --status-level all --test-threads=1 ${@}
+"""

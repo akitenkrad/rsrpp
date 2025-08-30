@@ -51,7 +51,10 @@
 //! ```sh
 //! cargo test
 //! ```
-#[cfg(test)]
-mod tests;
 
+pub mod config;
+pub mod converter;
+pub mod extracter;
+pub mod models;
 pub mod parser;
+pub mod test_utils;

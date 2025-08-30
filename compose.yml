@@ -1,8 +1,8 @@
 services:
-  instance:
+  rsrpp:
     build:
-      context: .
+      context: ./
       dockerfile: Dockerfile
     volumes:
-      - ./:/workspace
-    working_dir: /workspace
+      - .:/app
+    entrypoint: "/app/target/release/rsrpp"
