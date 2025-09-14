@@ -33,14 +33,16 @@ pub enum BuiltinPaper {
     UnsupervisedDialoguePolicies,
     MemAgent,
     AlgorithmOfThoughts,
+    LearningToUseAiForLearning,
 }
 
 impl BuiltinPaper {
-    pub const ALL: [BuiltinPaper; 4] = [
+    pub const ALL: [BuiltinPaper; 5] = [
         BuiltinPaper::AttentionIsAllYouNeed,
         BuiltinPaper::UnsupervisedDialoguePolicies,
         BuiltinPaper::MemAgent,
         BuiltinPaper::AlgorithmOfThoughts,
+        BuiltinPaper::LearningToUseAiForLearning,
     ];
 
     pub fn meta(&self) -> (&'static str, &'static str, &'static str) {
@@ -64,6 +66,11 @@ impl BuiltinPaper {
                 "https://arxiv.org/pdf/2308.10379",
                 "2308.10379.pdf",
                 "Algorithm of Thoughts: Enhancing Exploration of Ideas in Large Language Models",
+            ),
+            BuiltinPaper::LearningToUseAiForLearning => (
+                "https://arxiv.org/pdf/2508.13962",
+                "2508.13962.pdf",
+                "Learning to Use AI for Learning: How Can We Effectively Teach and Measure Prompting Literacy for K–12 Students?",
             ),
         }
     }
@@ -354,7 +361,7 @@ mod tests {
     #[tokio::test]
     async fn test_download() {
         let tp = TestPapers::setup().await.unwrap();
-        assert_eq!(tp.papers.len(), 4);
+        assert_eq!(tp.papers.len(), 5);
         for p in &tp.papers {
             assert!(p.dest_path(&tp.tmp_dir).exists());
         }

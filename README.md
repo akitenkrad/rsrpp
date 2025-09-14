@@ -201,6 +201,13 @@ This project is released under the MIT License. See the [LICENSE](LICENSE) file 
 ## Releases
 
 <details open>
+<summary>1.0.18</summary>
+
+- updated how to extract section titles from PDF.
+
+</details>
+
+<details>
 <summary>1.0.17</summary>
 
 - restructured `rsrpp.parser`.

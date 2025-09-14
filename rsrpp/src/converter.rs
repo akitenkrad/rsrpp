@@ -6,6 +6,7 @@ use quick_xml::events::Event;
 use reqwest as request;
 use scraper::html;
 use std::{
+    collections::HashMap,
     fs::File,
     io::Read,
     path::Path,
@@ -154,7 +155,10 @@ pub(crate) fn save_pdf_as_xml(
         }
     }
 
-    let mut font_number = 0;
+    // Detect title font size
+    let mut current_font_number = 0;
+    let mut current_text = String::new();
+    let mut title_fonts = vec![];
     let xml_text = std::fs::read_to_string(xml_path)?;
     let mut reader = quick_xml::Reader::from_str(&xml_text);
     reader.config_mut().trim_text(true);
@@ -165,25 +169,29 @@ pub(crate) fn save_pdf_as_xml(
                     for attr in e.attributes() {
                         let attr = attr?;
                         if attr.key.as_ref() == b"font" {
-                            font_number = String::from_utf8_lossy(attr.value.as_ref())
+                            current_font_number = String::from_utf8_lossy(attr.value.as_ref())
                                 .parse::<i32>()
                                 .unwrap();
                         }
                     }
+                    current_text.clear();
                 }
             }
             Ok(Event::Text(e)) => {
-                if String::from_utf8_lossy(e.as_ref()).to_lowercase() == "abstract"
-                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "introduction"
-                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "background"
-                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "method"
-                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "related work"
-                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "related works"
-                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "experiments"
-                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "conclusion"
-                    || String::from_utf8_lossy(e.as_ref()).to_lowercase() == "references"
-                {
-                    break;
+                current_text.push_str(
+                    String::from_utf8_lossy(e.as_ref()).to_string().to_lowercase().trim(),
+                );
+            }
+            Ok(Event::End(e)) => {
+                if e.name().as_ref() == b"text" {
+                    if current_text == "introduction"
+                        || current_text == "conclusion"
+                        || current_text == "references"
+                    {
+                        tracing::info!("Found title section: {}", current_text);
+                        title_fonts.push(current_font_number);
+                    }
+                    current_text.clear();
                 }
             }
             Ok(Event::Eof) => {
@@ -196,7 +204,23 @@ pub(crate) fn save_pdf_as_xml(
         }
     }
 
-    if verbose {
+    // Determine the most common title font size
+    if cfg!(test) {
+        tracing::info!("All Title Font Sizes: {:?}", title_fonts);
+    }
+    title_fonts.sort();
+    let mut counts = HashMap::new();
+    for font in title_fonts.iter().cloned() {
+        *counts.entry(font).or_insert(0) += 1;
+    }
+    title_fonts.sort_by(|a, b| counts.get(b).cmp(&counts.get(a)));
+    let title_font = title_fonts.first().unwrap().clone();
+
+    if cfg!(test) {
+        tracing::info!("Detected Title Font Size: {}", title_font);
+    }
+
+    if verbose || cfg!(test) {
         tracing::info!(
             "Extracted Title Font Size in {:.2}s",
             time.elapsed().as_secs()
@@ -219,7 +243,7 @@ pub(crate) fn save_pdf_as_xml(
     };
     let mut page_number = 0;
     let mut start_paper = false;
-    let mut is_title = false;
+    let mut probably_title = false;
     let regex_is_number = regex::Regex::new(r"^\d+$").unwrap();
     let regex_trim_number = regex::Regex::new(r"^\d+\.?\s*").unwrap();
     let mut reader = quick_xml::Reader::from_str(&xml_text);
@@ -247,13 +271,10 @@ pub(crate) fn save_pdf_as_xml(
                     .parse::<i32>()
                     .unwrap();
 
-                    if font_number == _font_number {
-                        is_title = true;
-                        if cfg!(test) {
-                            tracing::info!("Found title: {} pt", font_number);
-                        }
+                    if title_font == _font_number {
+                        probably_title = true;
                     } else {
-                        is_title = false;
+                        probably_title = false;
                     }
                     continue;
                 }
@@ -264,10 +285,13 @@ pub(crate) fn save_pdf_as_xml(
                     continue;
                 }
                 let text = regex_trim_number.replace(&text, "").to_string().trim().to_string();
-                if is_title {
-                    if text.to_lowercase() == "abstract" {
-                        start_paper = true;
-                    }
+
+                if text.to_lowercase().trim() == "abstract" {
+                    start_paper = true;
+                }
+
+                if probably_title {
+                    // Skip invalid section titles
                     if !start_paper {
                         continue;
                     }
@@ -275,6 +299,8 @@ pub(crate) fn save_pdf_as_xml(
                     if cfg!(test) {
                         tracing::info!("Found section title: {}", text);
                     }
+
+                    // Skip duplicated section titles
                     config.sections.push((page_number, text.to_string()));
                     if text.to_lowercase() == "references" {
                         break;
@@ -578,6 +604,48 @@ mod tests {
         assert_eq!(config.sections[7].1, "Limitations and Risks".to_string());
         assert_eq!(config.sections[8].1, "Broader Impact".to_string());
         assert_eq!(config.sections[9].1, "References".to_string());
+
+        for (page, section) in config.sections.iter() {
+            tracing::info!("page: {}, section: {}", page, section);
+        }
+
+        let _ = config.clean_files();
+        let _ = tp.cleanup();
+    }
+    #[test_log::test(tokio::test)]
+    async fn test_save_pdf_4() {
+        let tp = TestPapers::setup().await.expect("setup papers");
+        let paper =
+            tp.get_by_title(BuiltinPaper::LearningToUseAiForLearning).expect("paper not found");
+        let local_path = paper.dest_path(&tp.tmp_dir);
+        assert!(local_path.exists(), "cached sample missing");
+        let time = std::time::Instant::now();
+        let mut config = ParserConfig::new();
+        save_pdf(local_path.to_str().unwrap(), &mut config, true, time).await.unwrap();
+
+        assert!(Path::new(&config.pdf_path).exists());
+
+        for (_, path) in config.pdf_figures.iter() {
+            tracing::info!("path: {}", path);
+            assert!(Path::new(path).exists());
+        }
+
+        assert_eq!(config.sections[0].1, "Introduction".to_string());
+        assert_eq!(config.sections[1].1, "Related Work".to_string());
+        assert_eq!(
+            config.sections[2].1,
+            "Prompting Literacy Module Overview".to_string()
+        );
+        assert_eq!(config.sections[3].1, "Study 1".to_string());
+        assert_eq!(
+            config.sections[4].1,
+            "Study 2: Assessment Iteration Follow-Up".to_string()
+        );
+        assert_eq!(
+            config.sections[5].1,
+            "Lessons Learned and Future Work".to_string()
+        );
+        assert_eq!(config.sections[6].1, "References".to_string());
 
         for (page, section) in config.sections.iter() {
             tracing::info!("page: {}, section: {}", page, section);

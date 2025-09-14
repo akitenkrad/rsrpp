@@ -37,6 +37,22 @@ Options:
 ## Releases
 
 <details open>
+<summary>1.0.18</summary>
+
+- updated how to extract section titles from PDF.
+
+</details>
+
+<details>
+<summary>1.0.17</summary>
+
+- restructured `rsrpp.parser`.
+- updated how to extract section titles from PDF.
+- updated tests.
+
+</details>
+
+<details>
 <summary>1.0.16</summary>
 
 - removed `init_logger` form `rsrpp`.
