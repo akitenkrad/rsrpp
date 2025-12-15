@@ -160,8 +160,33 @@ impl Block {
     pub fn get_text(&self) -> String {
         let mut text = String::new();
         for line in &self.lines {
-            text = text.trim().trim_end_matches("-").to_string();
-            text.push_str(" ");
+                text = text.trim().to_string();
+                if text.ends_with("-") {
+                    // 意味を壊すよりも、表記上の崩壊に逃げる
+                    // NLPのembedding埋め込みベクトルのtokenizerにとっては、
+
+                    // unsupervised
+                    // → ["unsupervised"]
+
+                    // unsu-pervised
+                    // → ["unsu", "-", "pervised"]
+                    // ここで問題になる。
+                    // 1. unsu も pervised も 意味を持たない
+                    // 2. そしてこれが、学習時に ほぼ出現しないトークン
+                    // => 崩壊に向かうか
+
+                    // ❌ unsu-pervised を残す → 致命傷
+
+                    // ⚠ Transformerbased にする → 軽傷
+
+                    
+                    text = text.trim().trim_end_matches("-").to_string();
+                    // ハイフン終わりの時はスペースいらない
+                } else { 
+                    text.push_str(" ");
+                }
+        //      text = text.trim().trim_end_matches("-").to_string();
+        //     text.push_str(" ");
             text.push_str(&line.get_text());
         }
         return text.trim().to_string();
