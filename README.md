@@ -190,6 +190,8 @@ cargo nextest
 
 This project is released under the MIT License. See the [LICENSE](LICENSE) file for details.
 
+Note: This project is based on rsrpp by Aki.
+
 ## 🔗 Related Links
 
 - [Crates.io - rsrpp](https://crates.io/crates/rsrpp)
@@ -310,7 +312,3 @@ This project is released under the MIT License. See the [LICENSE](LICENSE) file 
 - Updated the `Section` module. `content: String` was replaced by `content: Vec<TextBlock>`.
 
 </details>
-
-License This software is released under the MIT License. see **LICENSE**.
-
-Note: This project is based on rsrpp by Aki.
