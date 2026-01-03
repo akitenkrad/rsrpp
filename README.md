@@ -104,9 +104,10 @@ RSRPP consists of the following modules:
 - **`models`**: Data structure definitions
   - `Word`: Word-level information (coordinates, font size, etc.)
   - `Line`: Line-level information and word collections
-  - `Block`: Block-level information and line collections  
+  - `Block`: Block-level information and line collections
   - `Page`: Page-level information and block collections
   - `Section`: Section structure (Abstract, Introduction, etc.)
+  - `fix_suffix_hyphens`: Text normalization for compound words (e.g., "databased" → "data-based")
 
 - **`extracter`**: Figure and table extraction functionality
   - Figure detection using OpenCV
@@ -203,6 +204,15 @@ Note: This project is based on rsrpp by Aki.
 ## Releases
 
 <details open>
+<summary>1.0.19</summary>
+
+- Refactored `fix_suffix_hyphens` to support 31 compound word suffixes:
+  - `-based`, `-driven`, `-oriented`, `-aware`, `-agnostic`, `-independent`, `-dependent`, `-first`, `-native`, `-centric`, `-intensive`, `-bound`, `-safe`, `-free`, `-proof`, `-efficient`, `-optimized`, `-enabled`, `-powered`, `-ready`, `-capable`, `-compatible`, `-compliant`, `-level`, `-scale`, `-wide`, `-specific`, `-friendly`, `-facing`, `-like`, `-style`
+- Added unit tests for suffix hyphenation functionality.
+
+</details>
+
+<details>
 <summary>1.0.18</summary>
 
 - updated how to extract section titles from PDF.
