@@ -1,34 +1,94 @@
 use crate::config::PageNumber;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
-// 2025.12.16 変更点
-use regex::Regex;
+/// List of suffixes that should be hyphenated when preceded by a word.
+/// Example: "databased" -> "data-based", "eventdriven" -> "event-driven"
+const HYPHENATED_SUFFIXES: &[&str] = &[
+    "based",
+    "driven",
+    "oriented",
+    "aware",
+    "agnostic",
+    "independent",
+    "dependent",
+    "first",
+    "native",
+    "centric",
+    "intensive",
+    "bound",
+    "safe",
+    "free",
+    "proof",
+    "efficient",
+    "optimized",
+    "enabled",
+    "powered",
+    "ready",
+    "capable",
+    "compatible",
+    "compliant",
+    "level",
+    "scale",
+    "wide",
+    "specific",
+    "friendly",
+    "facing",
+    "like",
+    "style",
+];
 
-pub fn fix_based_hyphen(text: &str) -> String {
-    let re = Regex::new(r"[A-Za-z]+based\b").unwrap();
+/// Pre-compiled regexes for suffix hyphenation.
+/// Each suffix has its own regex, sorted by length (longest first) to ensure
+/// proper matching (e.g., "independent" matches before "dependent").
+/// Uses \b at start to prevent re-matching already-hyphenated words.
+static SUFFIX_REGEXES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+    let mut suffixes: Vec<&str> = HYPHENATED_SUFFIXES.to_vec();
+    suffixes.sort_by(|a, b| b.len().cmp(&a.len()));
+    suffixes
+        .into_iter()
+        .map(|suffix| {
+            let pattern = format!(r"\b[A-Za-z]+{}\b", suffix);
+            (Regex::new(&pattern).unwrap(), suffix)
+        })
+        .collect()
+});
 
-    re.replace_all(text, |caps: &regex::Captures| {
-        let m = caps.get(0).unwrap();
-        let s = m.as_str();
+/// Fixes compound words that should have hyphens before specific suffixes.
+/// Example: "databased" -> "data-based", "userdriven" -> "user-driven"
+pub fn fix_suffix_hyphens(text: &str) -> String {
+    let mut result = text.to_string();
+    for (regex, suffix) in SUFFIX_REGEXES.iter() {
+        let current = result.clone();
+        result = regex
+            .replace_all(&current, |caps: &regex::Captures| {
+                let m = caps.get(0).unwrap();
+                let matched = m.as_str();
+                let start_pos = m.start();
 
-        // "based" の開始位置
-        let based_pos = s.len() - 5;
+                // Skip if preceded by a hyphen (already hyphenated compound)
+                if start_pos > 0 {
+                    let prev_in_text = current.as_bytes()[start_pos - 1] as char;
+                    if prev_in_text == '-' {
+                        return matched.to_string();
+                    }
+                }
 
-        // 直前の文字を確認
-        if based_pos > 0 {
-            let prev = s.as_bytes()[based_pos - 1] as char;
-
-            if prev != '-' && prev != ' ' {
-                // foo + based → foo-based
-                let (head, _) = s.split_at(based_pos);
-                return format!("{}-based", head);
-            }
-        }
-
-        s.to_string()
-    })
-    .to_string()
+                let suffix_pos = matched.len() - suffix.len();
+                if suffix_pos > 0 {
+                    let prev_char = matched.as_bytes()[suffix_pos - 1] as char;
+                    if prev_char != '-' && prev_char != ' ' {
+                        let (head, _) = matched.split_at(suffix_pos);
+                        return format!("{}-{}", head, suffix);
+                    }
+                }
+                matched.to_string()
+            })
+            .to_string();
+    }
+    result
 }
 
 /// The `Word` struct represents a word in a PDF document.
@@ -202,7 +262,7 @@ impl Block {
             text.push_str(&line.get_text());
         }
 
-        text = fix_based_hyphen(&text);
+        text = fix_suffix_hyphens(&text);
         return text.trim().to_string();
     }
 }
@@ -627,6 +687,147 @@ impl Section {
             return String::new();
         } else {
             return self.contents.join("\n");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test: Suffix directly connected to a word should have hyphen inserted
+    #[test]
+    fn test_fix_suffix_hyphens_direct_connection() {
+        // -based
+        assert_eq!(fix_suffix_hyphens("databased"), "data-based");
+        assert_eq!(fix_suffix_hyphens("modelbased"), "model-based");
+
+        // -driven
+        assert_eq!(fix_suffix_hyphens("eventdriven"), "event-driven");
+        assert_eq!(fix_suffix_hyphens("datadriven"), "data-driven");
+
+        // -oriented
+        assert_eq!(fix_suffix_hyphens("objectoriented"), "object-oriented");
+
+        // -aware
+        assert_eq!(fix_suffix_hyphens("contextaware"), "context-aware");
+
+        // -friendly
+        assert_eq!(fix_suffix_hyphens("userfriendly"), "user-friendly");
+
+        // -specific
+        assert_eq!(fix_suffix_hyphens("domainspecific"), "domain-specific");
+    }
+
+    /// Test: Already hyphenated words should remain unchanged
+    #[test]
+    fn test_fix_suffix_hyphens_already_hyphenated() {
+        assert_eq!(fix_suffix_hyphens("data-based"), "data-based");
+        assert_eq!(fix_suffix_hyphens("event-driven"), "event-driven");
+        assert_eq!(fix_suffix_hyphens("object-oriented"), "object-oriented");
+        assert_eq!(fix_suffix_hyphens("context-aware"), "context-aware");
+        assert_eq!(fix_suffix_hyphens("user-friendly"), "user-friendly");
+        assert_eq!(fix_suffix_hyphens("domain-specific"), "domain-specific");
+    }
+
+    /// Test: Space-separated words should remain unchanged
+    #[test]
+    fn test_fix_suffix_hyphens_space_separated() {
+        assert_eq!(fix_suffix_hyphens("data based"), "data based");
+        assert_eq!(fix_suffix_hyphens("event driven"), "event driven");
+        assert_eq!(fix_suffix_hyphens("object oriented"), "object oriented");
+        assert_eq!(fix_suffix_hyphens("context aware"), "context aware");
+    }
+
+    /// Test: Multiple suffixes in one string
+    #[test]
+    fn test_fix_suffix_hyphens_multiple_occurrences() {
+        assert_eq!(
+            fix_suffix_hyphens("This is a databased and eventdriven system."),
+            "This is a data-based and event-driven system."
+        );
+        assert_eq!(
+            fix_suffix_hyphens("userfriendly and domainspecific approach"),
+            "user-friendly and domain-specific approach"
+        );
+    }
+
+    /// Test: Mixed cases (some need fixing, some don't)
+    #[test]
+    fn test_fix_suffix_hyphens_mixed_cases() {
+        assert_eq!(
+            fix_suffix_hyphens("data-based and eventdriven"),
+            "data-based and event-driven"
+        );
+        assert_eq!(
+            fix_suffix_hyphens("The modelbased approach is user-friendly."),
+            "The model-based approach is user-friendly."
+        );
+    }
+
+    /// Test: No suffix present - string should remain unchanged
+    #[test]
+    fn test_fix_suffix_hyphens_no_suffix() {
+        assert_eq!(fix_suffix_hyphens("hello world"), "hello world");
+        assert_eq!(fix_suffix_hyphens("simple text"), "simple text");
+        assert_eq!(fix_suffix_hyphens(""), "");
+    }
+
+    /// Test: Suffix alone without prefix should remain unchanged
+    #[test]
+    fn test_fix_suffix_hyphens_suffix_alone() {
+        // "based" alone requires at least one letter before it in the regex
+        // so it should not match
+        assert_eq!(fix_suffix_hyphens("based"), "based");
+        assert_eq!(fix_suffix_hyphens("driven"), "driven");
+        assert_eq!(fix_suffix_hyphens("oriented"), "oriented");
+    }
+
+    /// Test: All supported suffixes
+    #[test]
+    fn test_fix_suffix_hyphens_all_suffixes() {
+        // Test a sampling of all suffix types
+        let test_cases = vec![
+            ("databased", "data-based"),
+            ("datadriven", "data-driven"),
+            ("objectoriented", "object-oriented"),
+            ("contextaware", "context-aware"),
+            ("platformagnostic", "platform-agnostic"),
+            ("platformindependent", "platform-independent"),
+            ("pathdependent", "path-dependent"),
+            ("mobilefirst", "mobile-first"),
+            ("cloudnative", "cloud-native"),
+            ("datacentric", "data-centric"),
+            ("resourceintensive", "resource-intensive"),
+            ("cpubound", "cpu-bound"),
+            ("threadsafe", "thread-safe"),
+            ("errorfree", "error-free"),
+            ("futureproof", "future-proof"),
+            ("energyefficient", "energy-efficient"),
+            ("codeoptimized", "code-optimized"),
+            ("aienabled", "ai-enabled"),
+            ("aipowered", "ai-powered"),
+            ("productionready", "production-ready"),
+            ("gpucapable", "gpu-capable"),
+            ("backwardcompatible", "backward-compatible"),
+            ("fullycompliant", "fully-compliant"),
+            ("lowlevel", "low-level"),
+            ("largescale", "large-scale"),
+            ("systemwide", "system-wide"),
+            ("taskspecific", "task-specific"),
+            ("userfriendly", "user-friendly"),
+            ("customerfacing", "customer-facing"),
+            ("shelllike", "shell-like"),
+            ("pythonstyle", "python-style"),
+        ];
+
+        for (input, expected) in test_cases {
+            assert_eq!(
+                fix_suffix_hyphens(input),
+                expected,
+                "Failed for input: {}",
+                input
+            );
         }
     }
 }
