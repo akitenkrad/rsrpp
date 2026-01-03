@@ -2,6 +2,35 @@ use crate::config::PageNumber;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// 2025.12.16 変更点
+use regex::Regex;
+
+pub fn fix_based_hyphen(text: &str) -> String {
+    let re = Regex::new(r"[A-Za-z]+based\b").unwrap();
+
+    re.replace_all(text, |caps: &regex::Captures| {
+        let m = caps.get(0).unwrap();
+        let s = m.as_str();
+
+        // "based" の開始位置
+        let based_pos = s.len() - 5;
+
+        // 直前の文字を確認
+        if based_pos > 0 {
+            let prev = s.as_bytes()[based_pos - 1] as char;
+
+            if prev != '-' && prev != ' ' {
+                // foo + based → foo-based
+                let (head, _) = s.split_at(based_pos);
+                return format!("{}-based", head);
+            }
+        }
+
+        s.to_string()
+    })
+    .to_string()
+}
+
 /// The `Word` struct represents a word in a PDF document.
 ///
 /// # Fields
@@ -160,10 +189,20 @@ impl Block {
     pub fn get_text(&self) -> String {
         let mut text = String::new();
         for line in &self.lines {
-            text = text.trim().trim_end_matches("-").to_string();
-            text.push_str(" ");
+                text = text.trim().to_string();
+                if text.ends_with("-") {
+                    // 意味を壊すよりも、表記上の崩壊に逃げる            
+                    text = text.trim().trim_end_matches("-").to_string();
+                    // ハイフン終わりの時はスペースいらない
+                } else { 
+                    text.push_str(" ");
+                }
+        //      text = text.trim().trim_end_matches("-").to_string();
+        //     text.push_str(" ");
             text.push_str(&line.get_text());
         }
+
+        text = fix_based_hyphen(&text);
         return text.trim().to_string();
     }
 }
@@ -536,6 +575,8 @@ impl Section {
         let mut last_text = String::new();
         let eos_ptn = regex::Regex::new(r"(\.)(\W)").unwrap();
         let ex_ws_ptn = regex::Regex::new(r"\s+").unwrap();
+    
+        
         for page in pages {
             for block in &page.blocks {
                 let keys = section_map.keys().cloned().collect::<Vec<String>>();
