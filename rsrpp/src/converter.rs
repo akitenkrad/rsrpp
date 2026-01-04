@@ -124,11 +124,10 @@ pub(crate) fn save_pdf_as_xml(
 ) -> Result<()> {
     let xml_path = Path::new(&config.pdf_xml_path);
 
-    Command::new("pdftohtml")
+    let output = Command::new("pdftohtml")
         .args(&[
             "-c".to_string(),
             "-s".to_string(),
-            "-dataurls".to_string(),
             "-xml".to_string(),
             "-zoom".to_string(),
             "1.0".to_string(),
@@ -136,7 +135,17 @@ pub(crate) fn save_pdf_as_xml(
             xml_path.to_str().unwrap().to_string(),
         ])
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::msg(format!(
+            "pdftohtml failed with exit code {:?}: {}",
+            output.status.code(),
+            stderr
+        )));
+    }
 
     let mut retry_count = 300;
     loop {
@@ -335,7 +344,7 @@ pub(crate) fn save_pdf_as_text(
 ) -> Result<()> {
     let html_path = Path::new(config.pdf_text_path.as_str());
 
-    let _ = Command::new("pdftotext")
+    let output = Command::new("pdftotext")
         .args(&[
             "-nopgbrk".to_string(),
             "-htmlmeta".to_string(),
@@ -346,7 +355,17 @@ pub(crate) fn save_pdf_as_text(
             html_path.to_str().unwrap().to_string(),
         ])
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::msg(format!(
+            "pdftotext failed with exit code {:?}: {}",
+            output.status.code(),
+            stderr
+        )));
+    }
 
     let mut retry_count = 300;
     loop {
