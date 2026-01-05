@@ -76,14 +76,18 @@ impl ParserConfig {
     ///
     /// # Returns
     ///
-    /// An `i32` representing the width of the PDF page.
+    /// A `Result<i32>` representing the width of the PDF page.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// This function will panic if the `page_width` key is not found in the `pdf_info`
+    /// Returns an error if the `page_width` key is not found in the `pdf_info`
     /// `HashMap` or if the value cannot be parsed as an `i32`.
-    pub fn pdf_width(&self) -> i32 {
-        return self.pdf_info.get("page_width").unwrap().parse::<i32>().unwrap();
+    pub fn pdf_width(&self) -> anyhow::Result<i32> {
+        self.pdf_info
+            .get("page_width")
+            .ok_or_else(|| anyhow::anyhow!("PDF width not available - pdfinfo may have failed"))?
+            .parse::<i32>()
+            .map_err(|e| anyhow::anyhow!("Invalid page_width value: {}", e))
     }
 
     /// Returns the height of the PDF page.
@@ -93,14 +97,18 @@ impl ParserConfig {
     ///
     /// # Returns
     ///
-    /// An `i32` representing the height of the PDF page.
+    /// A `Result<i32>` representing the height of the PDF page.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// This function will panic if the `page_height` key is not found in the `pdf_info`
+    /// Returns an error if the `page_height` key is not found in the `pdf_info`
     /// `HashMap` or if the value cannot be parsed as an `i32`.
-    pub fn pdf_height(&self) -> i32 {
-        return self.pdf_info.get("page_height").unwrap().parse::<i32>().unwrap();
+    pub fn pdf_height(&self) -> anyhow::Result<i32> {
+        self.pdf_info
+            .get("page_height")
+            .ok_or_else(|| anyhow::anyhow!("PDF height not available - pdfinfo may have failed"))?
+            .parse::<i32>()
+            .map_err(|e| anyhow::anyhow!("Invalid page_height value: {}", e))
     }
 
     /// Cleans up the generated files associated with the `ParserConfig` instance.

@@ -37,9 +37,12 @@ pub(crate) fn get_pdf_info(
 
         if key == "page_size" {
             let regex = regex::Regex::new(r"([\d|\.]+) x ([\d|\.]+).*?")?;
-            let caps = regex.captures(&value).unwrap();
-            config.pdf_info.insert("page_width".to_string(), caps[1].to_string());
-            config.pdf_info.insert("page_height".to_string(), caps[2].to_string());
+            if let Some(caps) = regex.captures(&value) {
+                if let (Some(width), Some(height)) = (caps.get(1), caps.get(2)) {
+                    config.pdf_info.insert("page_width".to_string(), width.as_str().to_string());
+                    config.pdf_info.insert("page_height".to_string(), height.as_str().to_string());
+                }
+            }
         }
         config.pdf_info.insert(key, value);
     }
@@ -89,19 +92,20 @@ pub(crate) fn save_pdf_as_figures(
         }
     }
 
-    for entry in glob(glob_query.to_str().unwrap())? {
+    let glob_query_str = glob_query.to_str()
+        .ok_or_else(|| Error::msg("Invalid glob query path"))?;
+    for entry in glob(glob_query_str)? {
         match entry {
             Ok(path) => {
                 let page_number: PageNumber = path
                     .file_stem()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .split("-")
-                    .last()
-                    .unwrap()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.split("-").last())
+                    .ok_or_else(|| Error::msg(format!("Invalid figure filename format: {:?}", path)))?
                     .parse::<i8>()?;
-                config.pdf_figures.insert(page_number, path.to_str().unwrap().to_string());
+                let path_str = path.to_str()
+                    .ok_or_else(|| Error::msg(format!("Invalid path encoding: {:?}", path)))?;
+                config.pdf_figures.insert(page_number, path_str.to_string());
             }
             Err(e) => return Err(Error::msg(format!("Error: {}", e))),
         }
@@ -180,7 +184,7 @@ pub(crate) fn save_pdf_as_xml(
                         if attr.key.as_ref() == b"font" {
                             current_font_number = String::from_utf8_lossy(attr.value.as_ref())
                                 .parse::<i32>()
-                                .unwrap();
+                                .unwrap_or(0); // Default to font 0 if parse fails
                         }
                     }
                     current_text.clear();
@@ -223,7 +227,15 @@ pub(crate) fn save_pdf_as_xml(
         *counts.entry(font).or_insert(0) += 1;
     }
     title_fonts.sort_by(|a, b| counts.get(b).cmp(&counts.get(a)));
-    let title_font = title_fonts.first().unwrap().clone();
+    let title_font = match title_fonts.first() {
+        Some(font) => font.clone(),
+        None => {
+            return Err(Error::msg(
+                "No section title fonts detected (looking for Introduction/Conclusion/References). \
+                 This may not be a standard academic paper format."
+            ));
+        }
+    };
 
     if cfg!(test) {
         tracing::info!("Detected Title Font Size: {}", title_font);
@@ -264,21 +276,22 @@ pub(crate) fn save_pdf_as_xml(
                     for attr in e.attributes() {
                         let attr = attr?;
                         if attr.key.as_ref() == b"number" {
-                            page_number =
-                                String::from_utf8_lossy(attr.value.as_ref()).parse::<i8>().unwrap();
+                            page_number = String::from_utf8_lossy(attr.value.as_ref())
+                                .parse::<i8>()
+                                .unwrap_or(0); // Default to page 0 if parse fails
                         }
                     }
                 } else if e.name().as_ref() == b"text" {
-                    let _font_number = String::from_utf8_lossy(
-                        e.attributes()
-                            .find(|attr| attr.clone().unwrap().key.as_ref() == b"font")
-                            .unwrap()
-                            .unwrap()
-                            .value
-                            .as_ref(),
-                    )
-                    .parse::<i32>()
-                    .unwrap();
+                    // Extract font number from text element attributes
+                    let _font_number = e.attributes()
+                        .filter_map(|attr| attr.ok())
+                        .find(|attr| attr.key.as_ref() == b"font")
+                        .map(|attr| {
+                            String::from_utf8_lossy(attr.value.as_ref())
+                                .parse::<i32>()
+                                .unwrap_or(0)
+                        })
+                        .unwrap_or(0); // Default to font 0 if attribute missing
 
                     if title_font == _font_number {
                         probably_title = true;

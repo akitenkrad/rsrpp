@@ -7,17 +7,39 @@ use crate::converter::pdf2html;
 use crate::extracter::{adjst_columns, extract_tables, get_text_area};
 use crate::models::{Block, Coordinate, Line, Page, Section};
 
+/// Helper function to parse an attribute from an HTML element.
+/// Returns an error with context if the attribute is missing or cannot be parsed.
+fn parse_attr<T: std::str::FromStr>(
+    element: &scraper::ElementRef,
+    attr: &str,
+    element_type: &str,
+) -> Result<T>
+where
+    T::Err: std::fmt::Display,
+{
+    element
+        .value()
+        .attr(attr)
+        .ok_or_else(|| anyhow::anyhow!("{} element missing '{}' attribute", element_type, attr))?
+        .parse::<T>()
+        .map_err(|e| anyhow::anyhow!("Invalid '{}' attribute in {} element: {}", attr, element_type, e))
+}
+
 pub(crate) fn parse_html2pages(config: &mut ParserConfig, html: html::Html) -> Result<Vec<Page>> {
     let mut pages = Vec::new();
     let page_selector = scraper::Selector::parse("page").unwrap();
     let _pages = html.select(&page_selector);
     for (_page_number, page) in _pages.enumerate() {
         let page_number = (_page_number + 1) as PageNumber;
-        let page_width = page.value().attr("width").unwrap().parse::<f32>().unwrap();
-        let page_height = page.value().attr("height").unwrap().parse::<f32>().unwrap();
+        let page_width: f32 = parse_attr(&page, "width", "page")?;
+        let page_height: f32 = parse_attr(&page, "height", "page")?;
         let mut _page = Page::new(page_width, page_height, page_number);
 
-        let fig_path = config.pdf_figures.get(&page_number).unwrap();
+        let fig_path = config.pdf_figures.get(&page_number)
+            .ok_or_else(|| anyhow::anyhow!(
+                "No figure path found for page {}. PDF processing may have failed.",
+                page_number
+            ))?;
         extract_tables(
             fig_path,
             &mut _page.tables,
@@ -28,10 +50,10 @@ pub(crate) fn parse_html2pages(config: &mut ParserConfig, html: html::Html) -> R
         let block_selector = scraper::Selector::parse("block").unwrap();
         let _blocks = page.select(&block_selector);
         for block in _blocks {
-            let block_xmin = block.value().attr("xmin").unwrap().parse::<f32>().unwrap();
-            let block_ymin = block.value().attr("ymin").unwrap().parse::<f32>().unwrap();
-            let block_xmax = block.value().attr("xmax").unwrap().parse::<f32>().unwrap();
-            let block_ymax = block.value().attr("ymax").unwrap().parse::<f32>().unwrap();
+            let block_xmin: f32 = parse_attr(&block, "xmin", "block")?;
+            let block_ymin: f32 = parse_attr(&block, "ymin", "block")?;
+            let block_xmax: f32 = parse_attr(&block, "xmax", "block")?;
+            let block_ymax: f32 = parse_attr(&block, "ymax", "block")?;
             let mut _block = Block::new(
                 block_xmin,
                 block_ymin,
@@ -42,10 +64,10 @@ pub(crate) fn parse_html2pages(config: &mut ParserConfig, html: html::Html) -> R
             let line_selector = scraper::Selector::parse("line").unwrap();
             let _lines = block.select(&line_selector);
             'line_iter: for line in _lines {
-                let line_xmin = line.value().attr("xmin").unwrap().parse::<f32>().unwrap();
-                let line_ymin = line.value().attr("ymin").unwrap().parse::<f32>().unwrap();
-                let line_xmax = line.value().attr("xmax").unwrap().parse::<f32>().unwrap();
-                let line_ymax = line.value().attr("ymax").unwrap().parse::<f32>().unwrap();
+                let line_xmin: f32 = parse_attr(&line, "xmin", "line")?;
+                let line_ymin: f32 = parse_attr(&line, "ymin", "line")?;
+                let line_xmax: f32 = parse_attr(&line, "xmax", "line")?;
+                let line_ymax: f32 = parse_attr(&line, "ymax", "line")?;
                 let mut _line = Line::new(
                     line_xmin,
                     line_ymin,
@@ -64,10 +86,10 @@ pub(crate) fn parse_html2pages(config: &mut ParserConfig, html: html::Html) -> R
                 let word_selector = scraper::Selector::parse("word").unwrap();
                 let _words = line.select(&word_selector);
                 for word in _words {
-                    let word_xmin = word.value().attr("xmin").unwrap().parse::<f32>().unwrap();
-                    let word_ymin = word.value().attr("ymin").unwrap().parse::<f32>().unwrap();
-                    let word_xmax = word.value().attr("xmax").unwrap().parse::<f32>().unwrap();
-                    let word_ymax = word.value().attr("ymax").unwrap().parse::<f32>().unwrap();
+                    let word_xmin: f32 = parse_attr(&word, "xmin", "word")?;
+                    let word_ymin: f32 = parse_attr(&word, "ymin", "word")?;
+                    let word_xmax: f32 = parse_attr(&word, "xmax", "word")?;
+                    let word_ymax: f32 = parse_attr(&word, "ymax", "word")?;
                     let text = word.text().collect::<String>();
                     _line.add_word(
                         text.clone(),
@@ -189,7 +211,7 @@ pub async fn parse(
         tracing::info!("Extracted Text Area in {:.2}s", time.elapsed().as_secs());
     }
 
-    adjst_columns(&mut pages, config);
+    adjst_columns(&mut pages, config)?;
     if verbose {
         tracing::info!("Adjusted Columns in {:.2}s", time.elapsed().as_secs());
     }
@@ -393,6 +415,10 @@ mod tests {
         let tp = TestPapers::setup().await.expect("setup test papers");
 
         for built_in_paper in BuiltinPaper::ALL.iter() {
+            // Skip Zep paper - it has non-standard format and is tested separately
+            if matches!(built_in_paper, BuiltinPaper::ZepTemporalKnowledgeGraph) {
+                continue;
+            }
             tracing::info!("Testing paper: {}", built_in_paper);
             let paper = tp.get_by_title(*built_in_paper).expect("paper not found");
             let mut config = ParserConfig::new();
@@ -421,6 +447,46 @@ mod tests {
             assert!(json.len() > 0);
             let _ = config.clean_files();
         }
+        let _ = tp.cleanup();
+    }
+
+    /// Test parsing a paper with non-standard section format (previously caused panic).
+    /// This paper (Zep) may fail to detect section titles, which should return an error
+    /// instead of panicking.
+    #[test_log::test(tokio::test)]
+    async fn test_parse_zep_non_standard_format() {
+        let tp = TestPapers::setup().await.expect("setup papers");
+        let paper = tp
+            .get_by_title(BuiltinPaper::ZepTemporalKnowledgeGraph)
+            .expect("Zep paper not found");
+        let filepath = paper.dest_path(&tp.tmp_dir);
+        assert!(filepath.exists(), "file not found: {}", filepath.display());
+
+        let mut config = ParserConfig::new();
+        let result = parse(filepath.to_str().unwrap(), &mut config, true).await;
+
+        // The paper may either:
+        // 1. Parse successfully (if section detection works)
+        // 2. Return an error (if section titles cannot be detected)
+        // Either way, it should NOT panic
+        match result {
+            Ok(pages) => {
+                tracing::info!("Zep paper parsed successfully with {} pages", pages.len());
+                assert!(pages.len() > 0, "Should have at least one page");
+            }
+            Err(e) => {
+                tracing::info!("Zep paper returned expected error: {}", e);
+                // This is acceptable - the paper has non-standard format
+                assert!(
+                    e.to_string().contains("section")
+                        || e.to_string().contains("title")
+                        || e.to_string().contains("font"),
+                    "Error should be related to section/title detection"
+                );
+            }
+        }
+
+        let _ = config.clean_files();
         let _ = tp.cleanup();
     }
 }

@@ -337,64 +337,76 @@ impl Page {
     ///
     /// # Returns
     ///
-    /// A `f32` representing the y-coordinate of the topmost line.
-    pub fn top(&self) -> f32 {
+    /// `Some(f32)` representing the y-coordinate of the topmost line, or `None` if the page has no lines.
+    pub fn top(&self) -> Option<f32> {
         let mut values: Vec<f32> = Vec::new();
         for block in &self.blocks {
             for line in &block.lines {
                 values.push(line.y);
             }
         }
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        return values.first().unwrap().clone();
+        if values.is_empty() {
+            return None;
+        }
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        values.first().copied()
     }
 
     /// Returns the y-coordinate of the bottommost line in the page.
     ///
     /// # Returns
     ///
-    /// A `f32` representing the y-coordinate of the bottommost line.
-    pub fn bottom(&self) -> f32 {
+    /// `Some(f32)` representing the y-coordinate of the bottommost line, or `None` if the page has no lines.
+    pub fn bottom(&self) -> Option<f32> {
         let mut values: Vec<f32> = Vec::new();
         for block in &self.blocks {
             for line in &block.lines {
                 values.push(line.y + line.height);
             }
         }
-        values.sort_by(|a, b| b.partial_cmp(a).unwrap());
-        return values.first().unwrap().clone();
+        if values.is_empty() {
+            return None;
+        }
+        values.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        values.first().copied()
     }
 
     /// Returns the x-coordinate of the leftmost line in the page.
     ///
     /// # Returns
     ///
-    /// A `f32` representing the x-coordinate of the leftmost line.
-    pub fn left(&self) -> f32 {
+    /// `Some(f32)` representing the x-coordinate of the leftmost line, or `None` if the page has no lines.
+    pub fn left(&self) -> Option<f32> {
         let mut values: Vec<f32> = Vec::new();
         for block in &self.blocks {
             for line in &block.lines {
                 values.push(line.x);
             }
         }
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        return values.first().unwrap().clone();
+        if values.is_empty() {
+            return None;
+        }
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        values.first().copied()
     }
 
     /// Returns the x-coordinate of the rightmost line in the page.
     ///
     /// # Returns
     ///
-    /// A `f32` representing the x-coordinate of the rightmost line.
-    pub fn right(&self) -> f32 {
+    /// `Some(f32)` representing the x-coordinate of the rightmost line, or `None` if the page has no lines.
+    pub fn right(&self) -> Option<f32> {
         let mut values: Vec<f32> = Vec::new();
         for block in &self.blocks {
             for line in &block.lines {
                 values.push(line.x + line.width);
             }
         }
-        values.sort_by(|a, b| b.partial_cmp(a).unwrap());
-        return values.first().unwrap().clone();
+        if values.is_empty() {
+            return None;
+        }
+        values.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        values.first().copied()
     }
 }
 
@@ -668,7 +680,7 @@ impl Section {
         let mut sections = Vec::new();
         for (title, contents) in section_map {
             sections.push(Section {
-                index: section_indices.get(&title).unwrap().clone(),
+                index: section_indices.get(&title).copied().unwrap_or(0),
                 title: title,
                 contents: contents,
             });
