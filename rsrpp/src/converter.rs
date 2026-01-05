@@ -227,19 +227,21 @@ pub(crate) fn save_pdf_as_xml(
         *counts.entry(font).or_insert(0) += 1;
     }
     title_fonts.sort_by(|a, b| counts.get(b).cmp(&counts.get(a)));
-    let title_font = match title_fonts.first() {
-        Some(font) => font.clone(),
+    let title_font: Option<i32> = match title_fonts.first() {
+        Some(font) => {
+            if cfg!(test) {
+                tracing::info!("Detected Title Font Size: {}", font);
+            }
+            Some(font.clone())
+        }
         None => {
-            return Err(Error::msg(
+            tracing::warn!(
                 "No section title fonts detected (looking for Introduction/Conclusion/References). \
-                 This may not be a standard academic paper format."
-            ));
+                 Using full text extraction mode for non-standard paper format."
+            );
+            None
         }
     };
-
-    if cfg!(test) {
-        tracing::info!("Detected Title Font Size: {}", title_font);
-    }
 
     if verbose || cfg!(test) {
         tracing::info!(
@@ -247,6 +249,15 @@ pub(crate) fn save_pdf_as_xml(
             time.elapsed().as_secs()
         );
     }
+
+    // Skip section detection if no title font was found
+    if title_font.is_none() {
+        if verbose {
+            tracing::info!("Skipping section detection - no title font detected");
+        }
+        return Ok(());
+    }
+    let title_font = title_font.unwrap();
 
     let pb: Option<ProgressBar> = if verbose {
         let bar = ProgressBar::new(

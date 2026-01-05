@@ -37,6 +37,29 @@ Options:
 ## Releases
 
 <details open>
+<summary>1.0.21</summary>
+
+- Fixed panic-causing unwrap() calls with proper error handling.
+
+</details>
+
+<details>
+<summary>1.0.20</summary>
+
+- Fixed Poppler 25.12.0 compatibility on macOS.
+
+</details>
+
+<details>
+<summary>1.0.19</summary>
+
+- Refactored `fix_suffix_hyphens` to support 31 compound word suffixes:
+  - `-based`, `-driven`, `-oriented`, `-aware`, `-agnostic`, `-independent`, `-dependent`, `-first`, `-native`, `-centric`, `-intensive`, `-bound`, `-safe`, `-free`, `-proof`, `-efficient`, `-optimized`, `-enabled`, `-powered`, `-ready`, `-capable`, `-compatible`, `-compliant`, `-level`, `-scale`, `-wide`, `-specific`, `-friendly`, `-facing`, `-like`, `-style`
+- Added unit tests for suffix hyphenation functionality.
+
+</details>
+
+<details>
 <summary>1.0.18</summary>
 
 - updated how to extract section titles from PDF.

@@ -56,6 +56,20 @@ License: MIT
 ## Releases
 
 <details open>
+<summary>1.0.21</summary>
+
+- Fixed panic-causing unwrap() calls with proper error handling.
+
+</details>
+
+<details>
+<summary>1.0.20</summary>
+
+- Fixed Poppler 25.12.0 compatibility on macOS.
+
+</details>
+
+<details>
 <summary>1.0.19</summary>
 
 - Refactored `fix_suffix_hyphens` to support 31 compound word suffixes:

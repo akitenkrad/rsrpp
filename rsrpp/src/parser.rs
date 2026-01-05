@@ -122,6 +122,13 @@ pub(crate) fn parse_extract_textarea(
         config.sections.iter().map(|(_, section)| section.to_lowercase()).collect::<Vec<String>>();
     let text_area = get_text_area(&pages);
     let title_index_regex = regex::Regex::new(r"\d+\.").unwrap();
+
+    // If no sections detected, use full text extraction mode (skip section-based filtering)
+    let full_text_mode = config.sections.is_empty();
+    if full_text_mode {
+        tracing::info!("Using full text extraction mode (no sections detected)");
+    }
+
     for page in pages.iter_mut() {
         let mut remove_indices: Vec<usize> = Vec::new();
         let width = if page.number_of_columns == 2 {
@@ -137,9 +144,11 @@ pub(crate) fn parse_extract_textarea(
 
             if (iou - 0.0).abs() < 1e-6 {
                 remove_indices.push(i);
-            } else if !section_titles.contains(&block_text.to_lowercase())
+            } else if !full_text_mode
+                && !section_titles.contains(&block_text.to_lowercase())
                 && (block.width / width < 0.3 && block.lines.len() < 4)
             {
+                // Only apply section-based filtering if not in full text mode
                 remove_indices.push(i);
             }
         }
@@ -154,6 +163,18 @@ pub(crate) fn parse_extract_section_text(
     config: &mut ParserConfig,
     pages: &mut Vec<Page>,
 ) -> Result<()> {
+    // Full text extraction mode: assign all blocks to "Content" section
+    if config.sections.is_empty() {
+        tracing::info!("Full text extraction mode: assigning all blocks to 'Content' section");
+        for page in pages.iter_mut() {
+            for block in page.blocks.iter_mut() {
+                block.section = "Content".to_string();
+            }
+        }
+        return Ok(());
+    }
+
+    // Standard mode: detect section transitions
     let mut current_section = "Abstract".to_string();
 
     if cfg!(test) {
@@ -451,8 +472,9 @@ mod tests {
     }
 
     /// Test parsing a paper with non-standard section format (previously caused panic).
-    /// This paper (Zep) may fail to detect section titles, which should return an error
-    /// instead of panicking.
+    /// This paper (Zep) uses full text extraction mode since standard section titles
+    /// (Introduction/Conclusion/References) are not detected. All content should be
+    /// extracted into a single "Content" section.
     #[test_log::test(tokio::test)]
     async fn test_parse_zep_non_standard_format() {
         let tp = TestPapers::setup().await.expect("setup papers");
@@ -465,26 +487,56 @@ mod tests {
         let mut config = ParserConfig::new();
         let result = parse(filepath.to_str().unwrap(), &mut config, true).await;
 
-        // The paper may either:
-        // 1. Parse successfully (if section detection works)
-        // 2. Return an error (if section titles cannot be detected)
-        // Either way, it should NOT panic
-        match result {
-            Ok(pages) => {
-                tracing::info!("Zep paper parsed successfully with {} pages", pages.len());
-                assert!(pages.len() > 0, "Should have at least one page");
-            }
-            Err(e) => {
-                tracing::info!("Zep paper returned expected error: {}", e);
-                // This is acceptable - the paper has non-standard format
-                assert!(
-                    e.to_string().contains("section")
-                        || e.to_string().contains("title")
-                        || e.to_string().contains("font"),
-                    "Error should be related to section/title detection"
-                );
+        // With full text extraction mode, the paper should parse successfully
+        let pages = result.expect("Zep paper should parse successfully with full text extraction mode");
+
+        tracing::info!("Zep paper parsed successfully with {} pages", pages.len());
+        assert!(pages.len() > 0, "Should have at least one page");
+
+        // Verify that sections are empty (non-standard format)
+        assert!(
+            config.sections.is_empty(),
+            "Zep paper should have no detected sections (non-standard format)"
+        );
+
+        // Verify that all blocks are assigned to "Content" section
+        let mut total_blocks = 0;
+        let mut content_blocks = 0;
+        for page in &pages {
+            for block in &page.blocks {
+                total_blocks += 1;
+                if block.section == "Content" {
+                    content_blocks += 1;
+                }
             }
         }
+        assert!(total_blocks > 0, "Should have at least one block");
+        assert_eq!(
+            total_blocks, content_blocks,
+            "All blocks should be assigned to 'Content' section in full text mode"
+        );
+        tracing::info!(
+            "Full text extraction: {} blocks assigned to 'Content' section",
+            content_blocks
+        );
+
+        // Verify that Section::from_pages produces a Content section with text
+        let sections = Section::from_pages(&pages);
+        assert!(sections.len() >= 1, "Should have at least one section");
+        let content_section = sections.iter().find(|s| s.title == "Content");
+        assert!(
+            content_section.is_some(),
+            "Should have a 'Content' section in full text mode"
+        );
+        let content_section = content_section.unwrap();
+        assert!(
+            !content_section.contents.is_empty(),
+            "Content section should have text"
+        );
+        tracing::info!(
+            "Content section has {} lines of text",
+            content_section.contents.len()
+        );
 
         let _ = config.clean_files();
         let _ = tp.cleanup();
