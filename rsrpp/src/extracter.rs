@@ -79,9 +79,12 @@ pub fn extract_tables(image_path: &str, tables: &mut Vec<Coordinate>, width: i32
         x_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         y_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         // x_values and y_values are guaranteed non-empty due to line.len() >= 3 check above
-        if let (Some(&x1), Some(&x2), Some(&y1), Some(&y2)) =
-            (x_values.first(), x_values.last(), y_values.first(), y_values.last())
-        {
+        if let (Some(&x1), Some(&x2), Some(&y1), Some(&y2)) = (
+            x_values.first(),
+            x_values.last(),
+            y_values.first(),
+            y_values.last(),
+        ) {
             tables.push(Coordinate::from_rect(x1, y1, x2, y2));
         }
     }
@@ -131,7 +134,9 @@ pub fn adjst_columns(pages: &mut Vec<Page>, config: &ParserConfig) -> anyhow::Re
         }
     };
 
-    let page_width = config.pdf_info.get("page_width")
+    let page_width = config
+        .pdf_info
+        .get("page_width")
         .ok_or_else(|| anyhow::anyhow!("page_width not available in pdf_info"))?
         .parse::<f32>()
         .map_err(|e| anyhow::anyhow!("Invalid page_width: {}", e))?;

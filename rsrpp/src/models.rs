@@ -249,16 +249,16 @@ impl Block {
     pub fn get_text(&self) -> String {
         let mut text = String::new();
         for line in &self.lines {
-                text = text.trim().to_string();
-                if text.ends_with("-") {
-                    // 意味を壊すよりも、表記上の崩壊に逃げる            
-                    text = text.trim().trim_end_matches("-").to_string();
-                    // ハイフン終わりの時はスペースいらない
-                } else { 
-                    text.push_str(" ");
-                }
-        //      text = text.trim().trim_end_matches("-").to_string();
-        //     text.push_str(" ");
+            text = text.trim().to_string();
+            if text.ends_with("-") {
+                // 意味を壊すよりも、表記上の崩壊に逃げる
+                text = text.trim().trim_end_matches("-").to_string();
+                // ハイフン終わりの時はスペースいらない
+            } else {
+                text.push_str(" ");
+            }
+            //      text = text.trim().trim_end_matches("-").to_string();
+            //     text.push_str(" ");
             text.push_str(&line.get_text());
         }
 
@@ -626,7 +626,7 @@ impl TextBlock {
 /// * `content` - The content of the section.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Section {
-    pub index: i8,
+    pub index: i16,
     pub title: String,
     pub contents: Vec<String>,
 }
@@ -642,13 +642,12 @@ impl Section {
     ///
     /// A vector of `Section` instances, each representing a section in the PDF document.
     pub fn from_pages(pages: &Vec<Page>) -> Vec<Section> {
-        let mut section_indices: HashMap<String, i8> = HashMap::new();
+        let mut section_indices: HashMap<String, i16> = HashMap::new();
         let mut section_map: HashMap<String, Vec<String>> = HashMap::new();
         let mut last_text = String::new();
         let eos_ptn = regex::Regex::new(r"(\.)(\W)").unwrap();
         let ex_ws_ptn = regex::Regex::new(r"\s+").unwrap();
-    
-        
+
         for page in pages {
             for block in &page.blocks {
                 let keys = section_map.keys().cloned().collect::<Vec<String>>();
@@ -673,7 +672,7 @@ impl Section {
                     content.push(text_block);
                 } else {
                     section_map.insert(block.section.clone(), vec![text_block]);
-                    section_indices.insert(block.section.clone(), section_indices.len() as i8);
+                    section_indices.insert(block.section.clone(), section_indices.len() as i16);
                 }
             }
         }

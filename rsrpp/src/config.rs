@@ -3,7 +3,7 @@ use rand::Rng;
 use std::collections::HashMap;
 use std::path::Path;
 
-pub type PageNumber = i8;
+pub type PageNumber = i16;
 
 /// `ParserConfig` is a configuration structure for parsing PDF documents.
 ///
@@ -31,6 +31,7 @@ pub struct ParserConfig {
     pub pdf_xml_path: String,
     pub sections: Vec<(PageNumber, String)>,
     pub pdf_info: HashMap<String, String>,
+    pub use_llm: bool,
 }
 
 impl ParserConfig {
@@ -66,6 +67,7 @@ impl ParserConfig {
             pdf_xml_path: pdf_raw_html_path,
             sections: sections,
             pdf_info: HashMap::new(),
+            use_llm: false,
         }
     }
 
