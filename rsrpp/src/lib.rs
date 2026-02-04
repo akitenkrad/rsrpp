@@ -55,6 +55,8 @@
 pub mod config;
 pub mod converter;
 pub mod extracter;
+#[allow(deprecated)]
+pub mod llm;
 pub mod models;
 pub mod parser;
 pub mod test_utils;

@@ -27,6 +27,8 @@ tracing-subscriber = { workspace = true }
 futures = { workspace = true }
 strum = { workspace = true }
 test-log = { workspace = true }
+openai-tools = { workspace = true }
+base64 = { workspace = true }
 
 [package.metadata.release]
 tag = false

@@ -31,6 +31,8 @@ clap = { version = "4.5.54", features = ["derive"] }
 futures = "0.3.31"
 strum = { version = "0.27.2", features = ["derive"] }
 test-log = { version = "0.2.19", features = ["trace"] }
+openai-tools = "1.0.4"
+base64 = "0.22"
 
 [workspace.metadata.release]
 tag-prefix = ""

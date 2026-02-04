@@ -16,6 +16,13 @@ struct Args {
 
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Disable LLM-enhanced processing"
+    )]
+    no_llm: bool,
 }
 
 #[tokio::main]
@@ -36,6 +43,9 @@ async fn main() {
     );
 
     let mut config = ParserConfig::new();
+    if !args.no_llm {
+        config.use_llm = true;
+    }
     let pages = parse(args.pdf.as_str(), &mut config, args.verbose).await.unwrap();
     let sections = Section::from_pages(&pages);
     let json = serde_json::to_string_pretty(&sections).unwrap();
