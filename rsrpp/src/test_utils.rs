@@ -35,16 +35,18 @@ pub enum BuiltinPaper {
     AlgorithmOfThoughts,
     LearningToUseAiForLearning,
     ZepTemporalKnowledgeGraph,
+    ImageGenerationSafety,
 }
 
 impl BuiltinPaper {
-    pub const ALL: [BuiltinPaper; 6] = [
+    pub const ALL: [BuiltinPaper; 7] = [
         BuiltinPaper::AttentionIsAllYouNeed,
         BuiltinPaper::UnsupervisedDialoguePolicies,
         BuiltinPaper::MemAgent,
         BuiltinPaper::AlgorithmOfThoughts,
         BuiltinPaper::LearningToUseAiForLearning,
         BuiltinPaper::ZepTemporalKnowledgeGraph,
+        BuiltinPaper::ImageGenerationSafety,
     ];
 
     pub fn meta(&self) -> (&'static str, &'static str, &'static str) {
@@ -78,6 +80,11 @@ impl BuiltinPaper {
                 "https://arxiv.org/pdf/2501.13956",
                 "2501.13956.pdf",
                 "Zep: A Temporal Knowledge Graph Architecture for Agent Memory",
+            ),
+            BuiltinPaper::ImageGenerationSafety => (
+                "https://arxiv.org/pdf/2601.10527",
+                "2601.10527.pdf",
+                "Image Generation Safety",
             ),
         }
     }
@@ -368,7 +375,7 @@ mod tests {
     #[tokio::test]
     async fn test_download() {
         let tp = TestPapers::setup().await.unwrap();
-        assert_eq!(tp.papers.len(), 6);
+        assert_eq!(tp.papers.len(), 7);
         for p in &tp.papers {
             assert!(p.dest_path(&tp.tmp_dir).exists());
         }

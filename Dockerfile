@@ -22,7 +22,7 @@ RUN apt update -y && \
 
 # Install dependencies
 RUN cargo install cargo-make && \
-    cargo install cargo-nextest
+    cargo install --locked cargo-nextest
 
 RUN adduser app && usermod -aG sudo app && chown -R app /app
 COPY --from=builder /app/target/release/rsrpp ./target/release/rsrpp
