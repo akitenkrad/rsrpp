@@ -636,9 +636,54 @@ pub struct TextBlock {
     pub coordinates: Coordinate,
 }
 
-pub struct Reference {
+pub struct TextBlockReference {
     pub text: String,
     pub coordinates: Coordinate,
+}
+
+/// A single bibliographic reference extracted from a paper.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Reference {
+    /// Raw text of the reference entry (may be null if LLM doesn't return it)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_text: Option<String>,
+    /// Parsed author list
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authors: Option<Vec<String>>,
+    /// Title of the referenced work
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Publication year
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+    /// Venue (journal, conference, etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub venue: Option<String>,
+    /// Digital Object Identifier
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doi: Option<String>,
+    /// URL if present
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// arXiv identifier (e.g., "2308.10379")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arxiv_id: Option<String>,
+    /// Volume number
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume: Option<String>,
+    /// Page range (e.g., "1-15")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pages: Option<String>,
+}
+
+/// Complete paper output with sections and references.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaperOutput {
+    /// All sections of the paper
+    pub sections: Vec<Section>,
+    /// Extracted references (separate from sections)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<Reference>,
 }
 
 impl TextBlock {

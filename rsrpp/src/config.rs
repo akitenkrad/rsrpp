@@ -3,6 +3,8 @@ use rand::Rng;
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::models::Reference;
+
 pub type PageNumber = i16;
 
 /// `ParserConfig` is a configuration structure for parsing PDF documents.
@@ -17,6 +19,8 @@ pub type PageNumber = i16;
 /// * `pdf_info` - A map containing metadata information about the PDF document.
 /// * `use_llm` - Whether to use LLM for enhanced math extraction.
 /// * `math_texts` - A map of (page_number, block_index) to math-marked text.
+/// * `extract_references` - Whether to extract structured references from the paper.
+/// * `references` - Extracted bibliographic references.
 ///
 /// # Methods
 ///
@@ -35,6 +39,8 @@ pub struct ParserConfig {
     pub pdf_info: HashMap<String, String>,
     pub use_llm: bool,
     pub math_texts: HashMap<(PageNumber, usize), String>,
+    pub extract_references: bool,
+    pub references: Vec<Reference>,
 }
 
 impl ParserConfig {
@@ -72,6 +78,8 @@ impl ParserConfig {
             pdf_info: HashMap::new(),
             use_llm: false,
             math_texts: HashMap::new(),
+            extract_references: false,
+            references: Vec::new(),
         }
     }
 

@@ -2,7 +2,11 @@ pub mod loggers;
 
 use crate::loggers::init_logger;
 use clap::Parser;
-use rsrpp::{config::ParserConfig, models::Section, parser::parse};
+use rsrpp::{
+    config::ParserConfig,
+    models::Section,
+    parser::{pages2paper_output, parse},
+};
 use std::path::Path;
 
 #[derive(Parser, Debug)]
@@ -37,6 +41,13 @@ struct Args {
         help = "Disable math markup (skip math detection and tagging)"
     )]
     no_math_markup: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Extract structured references (requires OPENAI_API_KEY)"
+    )]
+    extract_references: bool,
 }
 
 #[tokio::main]
@@ -60,24 +71,52 @@ async fn main() {
     if !args.no_llm {
         config.use_llm = true;
     }
+    if args.extract_references {
+        config.extract_references = true;
+    }
     let pages = parse(args.pdf.as_str(), &mut config, args.verbose).await.unwrap();
 
-    // Generate sections with or without math markup
-    let mut sections = if args.no_math_markup {
-        Section::from_pages(&pages)
-    } else {
-        Section::from_pages_with_math(&pages, &config.math_texts)
-    };
+    // Output format depends on whether references are extracted
+    let json = if args.extract_references {
+        // Use PaperOutput format with sections and references
+        let mut output = pages2paper_output(&pages, &config);
 
-    // Optionally merge captions into contents
-    if args.include_captions {
-        for section in &mut sections {
-            if !section.captions.is_empty() {
-                section.contents.extend(section.captions.drain(..));
+        // Optionally merge captions into contents
+        if args.include_captions {
+            for section in &mut output.sections {
+                if !section.captions.is_empty() {
+                    section.contents.extend(section.captions.drain(..));
+                }
             }
         }
-    }
 
-    let json = serde_json::to_string_pretty(&sections).unwrap();
+        // Optionally strip math markup
+        if args.no_math_markup {
+            for section in &mut output.sections {
+                section.math_contents = None;
+            }
+        }
+
+        serde_json::to_string_pretty(&output).unwrap()
+    } else {
+        // Generate sections with or without math markup
+        let mut sections = if args.no_math_markup {
+            Section::from_pages(&pages)
+        } else {
+            Section::from_pages_with_math(&pages, &config.math_texts)
+        };
+
+        // Optionally merge captions into contents
+        if args.include_captions {
+            for section in &mut sections {
+                if !section.captions.is_empty() {
+                    section.contents.extend(section.captions.drain(..));
+                }
+            }
+        }
+
+        serde_json::to_string_pretty(&sections).unwrap()
+    };
+
     std::fs::write(format!("{}", outfile), json).unwrap();
 }
