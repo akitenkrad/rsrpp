@@ -34,8 +34,14 @@
 //! let verbose = true;
 //! let url = "https://arxiv.org/pdf/1706.03762";
 //! let pages = parse(url, &mut config, verbose).await.unwrap(); // Vec<Page>
+//!
+//! // Basic conversion (captions separated, no math markup)
 //! let sections = Section::from_pages(&pages); // Vec<Section>
-//! let json = serde_json::to_string(&sections).unwrap(); // String
+//!
+//! // With math markup (math expressions wrapped in <math>...</math> tags)
+//! let sections_with_math = Section::from_pages_with_math(&pages, &config.math_texts);
+//!
+//! let json = serde_json::to_string(&sections_with_math).unwrap(); // String
 //! # Ok(())
 //! # }
 //! # #[tokio::main]

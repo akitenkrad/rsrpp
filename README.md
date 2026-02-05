@@ -16,6 +16,8 @@ A high-performance Rust-based research paper PDF parser library. Extracts struct
 - 🔧 **CLI Support**: Includes command-line tool `rsrpp-cli`
 - 📊 **Structured Output**: Detailed document structure data in JSON format
 - 🎯 **High Accuracy**: Figure detection and layout analysis using OpenCV
+- 🧮 **Math Detection**: Automatic math expression detection with `<math>...</math>` markup
+- 📑 **Caption Separation**: Automatic figure/table caption detection and separation
 
 ## 🚀 Quick Start
 
@@ -59,23 +61,26 @@ use rsrpp::parser::{parse, structs::{ParserConfig, Section}};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = ParserConfig::new();
     let verbose = true;
-    
+
     // Specify URL or local file path
     let url = "https://arxiv.org/pdf/1706.03762";
-    
+
     // Parse PDF and get page structure
     let pages = parse(url, &mut config, verbose).await?;
-    
-    // Convert to section structure
+
+    // Convert to section structure (basic)
     let sections = Section::from_pages(&pages);
-    
+
+    // Or with math markup (math expressions wrapped in <math>...</math> tags)
+    let sections_with_math = Section::from_pages_with_math(&pages, &config.math_texts);
+
     // Output in JSON format
-    let json = serde_json::to_string_pretty(&sections)?;
+    let json = serde_json::to_string_pretty(&sections_with_math)?;
     println!("{}", json);
-    
+
     // Clean up temporary files
     config.clean_files()?;
-    
+
     Ok(())
 }
 ```
@@ -88,6 +93,72 @@ rsrpp --pdf "https://arxiv.org/pdf/1706.03762" --out attention_paper.json --verb
 
 # Parse local file
 rsrpp --pdf ./paper.pdf --out output.json
+
+# Disable math markup (skip math detection)
+rsrpp --pdf ./paper.pdf --out output.json --no-math-markup
+
+# Include captions in main content instead of separate field
+rsrpp --pdf ./paper.pdf --out output.json --include-captions
+
+# Disable LLM-enhanced processing
+rsrpp --pdf ./paper.pdf --out output.json --no-llm
+```
+
+##### CLI Options
+
+| Option | Description |
+|--------|-------------|
+| `--pdf <URL\|PATH>` | Input PDF (URL or local file path) |
+| `--out <PATH>` | Output JSON file path (default: output.json) |
+| `--verbose` | Enable verbose output |
+| `--no-llm` | Disable LLM-enhanced processing |
+| `--include-captions` | Include captions in main content field |
+| `--no-math-markup` | Disable math detection and markup |
+
+## 📝 Output Format
+
+The parser outputs JSON with the following structure:
+
+```json
+[
+  {
+    "index": 0,
+    "title": "Abstract",
+    "contents": ["This paper presents...", "Our approach achieves..."],
+    "math_contents": ["This paper presents...", "Our approach achieves α = 0.95..."],
+    "captions": []
+  },
+  {
+    "index": 1,
+    "title": "1 Introduction",
+    "contents": ["Deep learning has..."],
+    "math_contents": ["Deep learning has <math>f(x) = Wx + b</math>..."],
+    "captions": ["Figure 1: Overview of our proposed method."]
+  }
+]
+```
+
+### Section Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `index` | `i16` | Section order in document |
+| `title` | `String` | Section title (e.g., "Abstract", "1 Introduction") |
+| `contents` | `Vec<String>` | Original text content (captions excluded) |
+| `math_contents` | `Option<Vec<String>>` | Text with math expressions wrapped in `<math>...</math>` tags (only present if math detected) |
+| `captions` | `Vec<String>` | Figure/table captions belonging to this section (empty array if none) |
+
+### Math Markup
+
+Math expressions are detected using:
+- Greek letters (α, β, γ, etc.)
+- Mathematical operators (∑, ∏, ∫, etc.)
+- Common math patterns (equations, subscripts, superscripts)
+
+Detected expressions are wrapped in `<math>...</math>` tags:
+```
+Original: "The loss function L = Σ(yi - ŷi)²"
+Marked:   "The loss function <math>L = Σ(yi - ŷi)²</math>"
 ```
 
 ## 📚 Architecture
@@ -104,10 +175,20 @@ RSRPP consists of the following modules:
 - **`models`**: Data structure definitions
   - `Word`: Word-level information (coordinates, font size, etc.)
   - `Line`: Line-level information and word collections
-  - `Block`: Block-level information and line collections
+  - `Block`: Block-level information and line collections (with `BlockType`: Body, Caption, Header)
   - `Page`: Page-level information and block collections
-  - `Section`: Section structure (Abstract, Introduction, etc.)
+  - `Section`: Section structure with `contents`, `math_contents`, and `captions` fields
+  - `RichText`: Text with original and math-marked versions
   - `fix_suffix_hyphens`: Text normalization for compound words (e.g., "databased" → "data-based")
+
+- **`cleaner`**: Text cleaning and block classification
+  - Figure/table caption detection (e.g., "Figure 1:", "Table 2.")
+  - Block type classification (Body, Caption, Header)
+
+- **`llm`**: LLM-enhanced processing and math detection
+  - Math expression detection using Unicode patterns and heuristics
+  - `<math>...</math>` tag insertion for detected math expressions
+  - LLM-based section validation
 
 - **`extracter`**: Figure and table extraction functionality
   - Figure detection using OpenCV
@@ -120,6 +201,7 @@ RSRPP consists of the following modules:
 - **`config`**: Configuration management
   - Parser configuration management
   - Temporary file management
+  - Math text mapping storage
 
 ### CLI Tool
 
@@ -167,8 +249,6 @@ async fn parse_paper(url: &str) -> Result<()> {
 }
 ```
 
-## 🧪 テスト
-
 ## 🧪 Testing
 
 The project includes a comprehensive test suite:
@@ -204,6 +284,21 @@ Note: This project is based on rsrpp by Aki.
 ## Releases
 
 <details open>
+<summary>1.0.22</summary>
+
+- Added text cleaning and math markup support:
+  - New `cleaner` module for caption detection (Figure, Table, Algorithm, etc.)
+  - New `llm` module for math expression detection and `<math>...</math>` markup
+  - `Section` now has `math_contents` and `captions` fields
+  - New `Section::from_pages_with_math()` method for math-marked output
+- New CLI options:
+  - `--include-captions`: Include captions in main content field
+  - `--no-math-markup`: Disable math detection and tagging
+  - `--no-llm`: Disable LLM-enhanced processing
+
+</details>
+
+<details>
 <summary>1.0.21</summary>
 
 - Fixed panic-causing unwrap() calls with proper error handling.
