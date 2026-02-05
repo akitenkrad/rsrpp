@@ -115,6 +115,13 @@ rsrpp --pdf ./paper.pdf --out output.json --no-llm
 | `--include-captions` | Include captions in main content field |
 | `--no-math-markup` | Disable math detection and markup |
 
+##### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `OPENAI_API_KEY` | OpenAI API key (required for LLM features) | - |
+| `OPENAI_API_MODEL` | Model to use for LLM processing | `gpt-5.2` |
+
 ## 📝 Output Format
 
 The parser outputs JSON with the following structure:
@@ -295,6 +302,7 @@ Note: This project is based on rsrpp by Aki.
   - `--include-captions`: Include captions in main content field
   - `--no-math-markup`: Disable math detection and tagging
   - `--no-llm`: Disable LLM-enhanced processing
+- New environment variable `OPENAI_API_MODEL` to specify LLM model (default: gpt-5.2)
 
 </details>
 

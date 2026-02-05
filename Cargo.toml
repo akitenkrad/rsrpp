@@ -5,7 +5,7 @@ members = ["rsrpp", "rsrpp-cli"]
 [workspace.package]
 authors = ["akitenkrad"]
 edition = "2021"
-version = "1.0.21"
+version = "1.0.22"
 description = "A Rust project for research paper pdf."
 repository = "https://github.com/akitenkrad/rsrpp.git"
 license = "MIT"
