@@ -2,11 +2,19 @@
 //!
 //! The `rsrpp` library provides a set of tools for parsing research papers.
 //!
+//! ## Features
+//!
+//! - Extract structured text from PDF papers (sections, paragraphs)
+//! - Detect and separate figure/table captions
+//! - Math expression detection and markup
+//! - **Structured reference extraction** (LLM-based, requires `OPENAI_API_KEY`)
+//!
 //! ## Quick Start
 //!
 //! ### Pre-requirements
 //! - Poppler: `sudo apt install poppler-utils`
 //! - OpenCV: `sudo apt install libopencv-dev clang libclang-dev`
+//! - (Optional) `OPENAI_API_KEY` environment variable for LLM features
 //!
 //! ### Installation
 //! To start using the `rsrpp` library, add it to your project's dependencies in the `Cargo.toml` file:
@@ -24,11 +32,12 @@
 //!
 //! ## Examples
 //!
-//! Here is a simple example of how to use the parser module:
+//! ### Basic Usage
 //!
 //! ```rust
-//! # use rsrpp::parser::structs::{ParserConfig, Section};
-//! # use rsrpp::parser::{parse, pages2json};
+//! # use rsrpp::config::ParserConfig;
+//! # use rsrpp::models::Section;
+//! # use rsrpp::parser::parse;
 //! # async fn try_main() -> Result<(), String> {
 //! let mut config = ParserConfig::new();
 //! let verbose = true;
@@ -48,6 +57,22 @@
 //! # async fn main() {
 //! #    try_main().await.unwrap();
 //! # }
+//! ```
+//!
+//! ### With Reference Extraction (requires OPENAI_API_KEY)
+//!
+//! ```rust,ignore
+//! use rsrpp::config::ParserConfig;
+//! use rsrpp::parser::{parse, pages2paper_output};
+//!
+//! let mut config = ParserConfig::new();
+//! config.extract_references = true; // Enable reference extraction
+//!
+//! let pages = parse("paper.pdf", &mut config, false).await?;
+//! let output = pages2paper_output(&pages, &config); // PaperOutput
+//!
+//! // output.sections - Vec<Section>
+//! // output.references - Vec<Reference> with authors, title, year, venue, etc.
 //! ```
 //!
 //! ## Tests
