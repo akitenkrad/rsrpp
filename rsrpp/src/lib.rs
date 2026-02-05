@@ -52,6 +52,7 @@
 //! cargo test
 //! ```
 
+pub mod cleaner;
 pub mod config;
 pub mod converter;
 pub mod extracter;

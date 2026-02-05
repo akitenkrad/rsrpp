@@ -15,6 +15,8 @@ pub type PageNumber = i16;
 /// * `pdf_xml_path` - The file path to the extracted XML data from the PDF document.
 /// * `sections` - A vector of tuples containing page numbers and section titles.
 /// * `pdf_info` - A map containing metadata information about the PDF document.
+/// * `use_llm` - Whether to use LLM for enhanced math extraction.
+/// * `math_texts` - A map of (page_number, block_index) to math-marked text.
 ///
 /// # Methods
 ///
@@ -32,6 +34,7 @@ pub struct ParserConfig {
     pub sections: Vec<(PageNumber, String)>,
     pub pdf_info: HashMap<String, String>,
     pub use_llm: bool,
+    pub math_texts: HashMap<(PageNumber, usize), String>,
 }
 
 impl ParserConfig {
@@ -68,6 +71,7 @@ impl ParserConfig {
             sections: sections,
             pdf_info: HashMap::new(),
             use_llm: false,
+            math_texts: HashMap::new(),
         }
     }
 

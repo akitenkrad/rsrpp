@@ -23,6 +23,20 @@ struct Args {
         help = "Disable LLM-enhanced processing"
     )]
     no_llm: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Include captions in the main contents field instead of separate captions field"
+    )]
+    include_captions: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Disable math markup (skip math detection and tagging)"
+    )]
+    no_math_markup: bool,
 }
 
 #[tokio::main]
@@ -47,8 +61,23 @@ async fn main() {
         config.use_llm = true;
     }
     let pages = parse(args.pdf.as_str(), &mut config, args.verbose).await.unwrap();
-    let sections = Section::from_pages(&pages);
-    let json = serde_json::to_string_pretty(&sections).unwrap();
 
+    // Generate sections with or without math markup
+    let mut sections = if args.no_math_markup {
+        Section::from_pages(&pages)
+    } else {
+        Section::from_pages_with_math(&pages, &config.math_texts)
+    };
+
+    // Optionally merge captions into contents
+    if args.include_captions {
+        for section in &mut sections {
+            if !section.captions.is_empty() {
+                section.contents.extend(section.captions.drain(..));
+            }
+        }
+    }
+
+    let json = serde_json::to_string_pretty(&sections).unwrap();
     std::fs::write(format!("{}", outfile), json).unwrap();
 }

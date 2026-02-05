@@ -2,6 +2,7 @@ use anyhow::Result;
 use scraper::html;
 use std::collections::HashMap;
 
+use crate::cleaner;
 use crate::config::{PageNumber, ParserConfig};
 use crate::converter::pdf2html;
 use crate::extracter::{adjst_columns, extract_tables, get_text_area};
@@ -322,8 +323,23 @@ pub async fn parse(
         tracing::info!("Extracted Sections in {:.2}s", time.elapsed().as_secs());
     }
 
-    // LLM math extraction (Phase 6)
-    if config.use_llm {
+    // Block classification (Caption detection)
+    cleaner::classify_blocks(&mut pages);
+    if verbose {
+        let caption_count: usize = pages
+            .iter()
+            .flat_map(|p| &p.blocks)
+            .filter(|b| b.block_type == crate::models::BlockType::Caption)
+            .count();
+        tracing::info!(
+            "Classified blocks in {:.2}s ({} captions detected)",
+            time.elapsed().as_secs(),
+            caption_count
+        );
+    }
+
+    // Math markup: LLM or heuristic
+    let math_texts = if config.use_llm {
         if verbose {
             tracing::info!("Running LLM math extraction...");
         }
@@ -347,6 +363,8 @@ pub async fn parse(
             }
         }
 
+        let mut math_texts: HashMap<(PageNumber, usize), String> = HashMap::new();
+
         if !pages_with_math.is_empty() {
             use futures::stream::{self, StreamExt};
 
@@ -359,28 +377,42 @@ pub async fn parse(
                 .collect()
                 .await;
 
-            // Merge LLM-extracted text back into pages
+            // Store LLM-extracted math text
             for (page_num, result) in results {
                 match result {
                     Ok(llm_text) if !llm_text.is_empty() => {
-                        if let Some(page) = pages.iter_mut().find(|p| p.page_number == page_num) {
-                            // Replace block text for blocks that likely contain math
-                            for block in &mut page.blocks {
+                        // Convert LaTeX notation to our math tags
+                        let converted = llm::convert_latex_to_math_tags(&llm_text);
+                        // Store for the whole page (block index 0 as placeholder)
+                        // In a more sophisticated implementation, we'd align text to blocks
+                        if let Some(page) = pages.iter().find(|p| p.page_number == page_num) {
+                            for (block_idx, block) in page.blocks.iter().enumerate() {
                                 let block_text = block.get_text();
                                 let density = llm::estimate_math_density(&block_text);
                                 if density >= math_threshold {
-                                    // Find corresponding text in LLM output and update
-                                    // For simplicity, we annotate the block with LLM text
-                                    // by updating the first line's words
+                                    // Mark this block as having math content
+                                    math_texts.insert(
+                                        (page_num, block_idx),
+                                        llm::mark_math_heuristic(&block_text),
+                                    );
                                     if verbose {
                                         tracing::info!(
-                                            "Updated math content on page {} (density: {:.2})",
+                                            "Marked math content on page {} block {} (density: {:.2})",
                                             page_num,
+                                            block_idx,
                                             density
                                         );
                                     }
                                 }
                             }
+                        }
+                        // Also log that we got LLM output
+                        if verbose {
+                            tracing::info!(
+                                "LLM extracted {} chars for page {}",
+                                converted.len(),
+                                page_num
+                            );
                         }
                     }
                     Ok(_) => {}
@@ -390,6 +422,24 @@ pub async fn parse(
                 }
             }
         }
+        math_texts
+    } else {
+        // Use heuristic math markup when LLM is not available
+        if verbose {
+            tracing::info!("Using heuristic math markup (LLM not available)...");
+        }
+        llm::apply_heuristic_math_markup(&pages)
+    };
+
+    // Store math texts in config for later use by Section::from_pages
+    config.math_texts = math_texts;
+
+    if verbose {
+        tracing::info!(
+            "Math markup complete in {:.2}s ({} blocks with math)",
+            time.elapsed().as_secs(),
+            config.math_texts.len()
+        );
     }
 
     if verbose {
@@ -399,6 +449,8 @@ pub async fn parse(
     return Ok(pages);
 }
 
+/// Converts pages to JSON using the old format (title + contents only).
+/// This is kept for backward compatibility.
 pub fn pages2json(pages: &Vec<Page>) -> String {
     let sections = Section::from_pages(pages);
     let mut json_data = Vec::<HashMap<&str, String>>::new();
@@ -410,6 +462,35 @@ pub fn pages2json(pages: &Vec<Page>) -> String {
     }
     let json = serde_json::to_string(&json_data).unwrap();
     return json;
+}
+
+/// Converts pages to JSON with full Section structure including math_contents and captions.
+///
+/// # Arguments
+///
+/// * `pages` - A reference to a vector of Pages.
+/// * `config` - A reference to ParserConfig containing math_texts.
+///
+/// # Returns
+///
+/// A JSON string representation of the sections.
+pub fn pages2json_with_math(pages: &Vec<Page>, config: &crate::config::ParserConfig) -> String {
+    let sections = Section::from_pages_with_math(pages, &config.math_texts);
+    serde_json::to_string(&sections).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Converts pages to Sections with full structure.
+///
+/// # Arguments
+///
+/// * `pages` - A reference to a vector of Pages.
+/// * `config` - A reference to ParserConfig containing math_texts.
+///
+/// # Returns
+///
+/// A vector of Section instances.
+pub fn pages2sections(pages: &Vec<Page>, config: &crate::config::ParserConfig) -> Vec<Section> {
+    Section::from_pages_with_math(pages, &config.math_texts)
 }
 
 #[cfg(test)]

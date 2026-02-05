@@ -4,6 +4,34 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+/// Block type classification for text blocks in a PDF document.
+///
+/// # Variants
+///
+/// * `Body` - Normal body text (default)
+/// * `Caption` - Figure/table captions (e.g., "Figure 1: ...")
+/// * `Header` - Section headers
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum BlockType {
+    #[default]
+    Body,
+    Caption,
+    Header,
+}
+
+/// Rich text representation with original and math-marked versions.
+///
+/// # Fields
+///
+/// * `original` - The original text content
+/// * `math_marked` - Optional text with math expressions marked using `<math>...</math>` tags
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RichText {
+    pub original: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub math_marked: Option<String>,
+}
+
 /// List of suffixes that should be hyphenated when preceded by a word.
 /// Example: "databased" -> "data-based", "eventdriven" -> "event-driven"
 const HYPHENATED_SUFFIXES: &[&str] = &[
@@ -196,6 +224,7 @@ impl Line {
 /// * `width` - The width of the block.
 /// * `height` - The height of the block.
 /// * `section` - The section of the document to which the block belongs.
+/// * `block_type` - The classification of the block (Body, Caption, or Header).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
     pub lines: Vec<Line>,
@@ -204,6 +233,7 @@ pub struct Block {
     pub width: f32,
     pub height: f32,
     pub section: String,
+    pub block_type: BlockType,
 }
 
 impl Block {
@@ -227,6 +257,7 @@ impl Block {
             width: width,
             height: height,
             section: String::new(),
+            block_type: BlockType::default(),
         }
     }
     /// Adds a new `Line` to the `Block`.
@@ -622,13 +653,20 @@ impl TextBlock {
 ///
 /// # Fields
 ///
+/// * `index` - The order index of the section.
 /// * `title` - The title of the section.
-/// * `content` - The content of the section.
+/// * `contents` - The content of the section (original text, captions excluded).
+/// * `math_contents` - Optional content with math expressions marked using `<math>...</math>` tags.
+/// * `captions` - Figure/table captions belonging to this section.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Section {
     pub index: i16,
     pub title: String,
     pub contents: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub math_contents: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captions: Vec<String>,
 }
 
 impl Section {
@@ -641,9 +679,11 @@ impl Section {
     /// # Returns
     ///
     /// A vector of `Section` instances, each representing a section in the PDF document.
+    /// Captions are separated into a dedicated field and excluded from main contents.
     pub fn from_pages(pages: &Vec<Page>) -> Vec<Section> {
         let mut section_indices: HashMap<String, i16> = HashMap::new();
         let mut section_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut caption_map: HashMap<String, Vec<String>> = HashMap::new();
         let mut last_text = String::new();
         let eos_ptn = regex::Regex::new(r"(\.)(\W)").unwrap();
         let ex_ws_ptn = regex::Regex::new(r"\s+").unwrap();
@@ -667,23 +707,168 @@ impl Section {
                 text_block = eos_ptn.replace_all(&text_block, "$1 $2").to_string();
                 text_block = ex_ws_ptn.replace_all(&text_block, " ").to_string();
 
-                if keys.contains(&block.section) {
-                    let content = section_map.get_mut(&block.section).unwrap();
-                    content.push(text_block);
+                // Separate captions from body content
+                let is_caption = block.block_type == BlockType::Caption;
+
+                if is_caption {
+                    // Add to captions map
+                    caption_map
+                        .entry(block.section.clone())
+                        .or_insert_with(Vec::new)
+                        .push(text_block);
+                    // Ensure section exists in indices
+                    if !section_indices.contains_key(&block.section) {
+                        section_indices.insert(block.section.clone(), section_indices.len() as i16);
+                    }
                 } else {
-                    section_map.insert(block.section.clone(), vec![text_block]);
-                    section_indices.insert(block.section.clone(), section_indices.len() as i16);
+                    // Add to content map (existing logic)
+                    if keys.contains(&block.section) {
+                        let content = section_map.get_mut(&block.section).unwrap();
+                        content.push(text_block);
+                    } else {
+                        section_map.insert(block.section.clone(), vec![text_block]);
+                        section_indices.insert(block.section.clone(), section_indices.len() as i16);
+                    }
                 }
             }
         }
         let mut sections = Vec::new();
         for (title, contents) in section_map {
+            let captions = caption_map.remove(&title).unwrap_or_default();
             sections.push(Section {
                 index: section_indices.get(&title).copied().unwrap_or(0),
                 title: title,
                 contents: contents,
+                math_contents: None, // Will be populated by math markup phase
+                captions: captions,
             });
         }
+        // Handle sections with only captions (no body content)
+        for (title, captions) in caption_map {
+            sections.push(Section {
+                index: section_indices.get(&title).copied().unwrap_or(0),
+                title: title,
+                contents: Vec::new(),
+                math_contents: None,
+                captions: captions,
+            });
+        }
+        sections.sort_by(|a, b| a.index.cmp(&b.index));
+        return sections;
+    }
+
+    /// Creates a vector of `Section` instances from pages with math markup.
+    ///
+    /// This is similar to `from_pages` but also populates `math_contents` using
+    /// the math_texts map from ParserConfig.
+    ///
+    /// # Arguments
+    ///
+    /// * `pages` - A reference to a vector of `Page` instances.
+    /// * `math_texts` - A map of (page_number, block_index) to math-marked text.
+    ///
+    /// # Returns
+    ///
+    /// A vector of `Section` instances with math_contents populated where applicable.
+    pub fn from_pages_with_math(
+        pages: &Vec<Page>,
+        math_texts: &HashMap<(crate::config::PageNumber, usize), String>,
+    ) -> Vec<Section> {
+        let mut section_indices: HashMap<String, i16> = HashMap::new();
+        let mut section_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut math_section_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut caption_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut last_text = String::new();
+        let mut last_math_text = String::new();
+        let eos_ptn = regex::Regex::new(r"(\.)(\W)").unwrap();
+        let ex_ws_ptn = regex::Regex::new(r"\s+").unwrap();
+
+        for page in pages {
+            for (block_idx, block) in page.blocks.iter().enumerate() {
+                let keys = section_map.keys().cloned().collect::<Vec<String>>();
+                let mut text_block = block.get_text().trim().to_string();
+
+                // Get math-marked version if available
+                let math_text = math_texts
+                    .get(&(page.page_number, block_idx))
+                    .cloned()
+                    .unwrap_or_else(|| text_block.clone());
+                let mut math_block = math_text.trim().to_string();
+
+                if text_block.ends_with("-") {
+                    last_text.push_str(&text_block.trim_end_matches("-"));
+                    last_math_text.push_str(&math_block.trim_end_matches("-"));
+                    continue;
+                }
+
+                if !last_text.is_empty() {
+                    last_text.push_str(&text_block);
+                    text_block = last_text.clone();
+                    last_text.clear();
+
+                    last_math_text.push_str(&math_block);
+                    math_block = last_math_text.clone();
+                    last_math_text.clear();
+                }
+
+                text_block = eos_ptn.replace_all(&text_block, "$1 $2").to_string();
+                text_block = ex_ws_ptn.replace_all(&text_block, " ").to_string();
+                math_block = eos_ptn.replace_all(&math_block, "$1 $2").to_string();
+                math_block = ex_ws_ptn.replace_all(&math_block, " ").to_string();
+
+                // Separate captions from body content
+                let is_caption = block.block_type == BlockType::Caption;
+
+                if is_caption {
+                    caption_map
+                        .entry(block.section.clone())
+                        .or_insert_with(Vec::new)
+                        .push(text_block);
+                    if !section_indices.contains_key(&block.section) {
+                        section_indices.insert(block.section.clone(), section_indices.len() as i16);
+                    }
+                } else {
+                    if keys.contains(&block.section) {
+                        section_map.get_mut(&block.section).unwrap().push(text_block);
+                        math_section_map.get_mut(&block.section).unwrap().push(math_block);
+                    } else {
+                        section_map.insert(block.section.clone(), vec![text_block]);
+                        math_section_map.insert(block.section.clone(), vec![math_block]);
+                        section_indices.insert(block.section.clone(), section_indices.len() as i16);
+                    }
+                }
+            }
+        }
+
+        let mut sections = Vec::new();
+        for (title, contents) in section_map {
+            let captions = caption_map.remove(&title).unwrap_or_default();
+            let math_contents = math_section_map.remove(&title);
+
+            // Only include math_contents if it differs from contents
+            let has_math = math_contents.as_ref().map_or(false, |mc| {
+                mc.iter().zip(contents.iter()).any(|(m, c)| m != c)
+            });
+
+            sections.push(Section {
+                index: section_indices.get(&title).copied().unwrap_or(0),
+                title: title,
+                contents: contents,
+                math_contents: if has_math { math_contents } else { None },
+                captions: captions,
+            });
+        }
+
+        for (title, captions) in caption_map {
+            sections.push(Section {
+                index: section_indices.get(&title).copied().unwrap_or(0),
+                title: title,
+                contents: Vec::new(),
+                math_contents: None,
+                captions: captions,
+            });
+        }
+
         sections.sort_by(|a, b| a.index.cmp(&b.index));
         return sections;
     }
@@ -699,6 +884,20 @@ impl Section {
         } else {
             return self.contents.join("\n");
         }
+    }
+
+    /// Returns the concatenated math-marked text if available, otherwise regular text.
+    ///
+    /// # Returns
+    ///
+    /// A `String` containing the math-marked text if available, otherwise the regular text.
+    pub fn get_math_text(&self) -> String {
+        if let Some(ref math) = self.math_contents {
+            if !math.is_empty() {
+                return math.join("\n");
+            }
+        }
+        self.get_text()
     }
 }
 

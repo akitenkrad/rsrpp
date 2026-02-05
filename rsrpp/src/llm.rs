@@ -2,8 +2,58 @@ use anyhow::Result;
 use openai_tools::chat::request::ChatCompletion;
 use openai_tools::common::message::{Content, Message};
 use openai_tools::common::role::Role;
+use regex::Regex;
+use std::sync::LazyLock;
 
 use crate::config::PageNumber;
+use crate::models::Page;
+
+/// Regex pattern for Unicode math symbols (Greek letters, operators, arrows, etc.)
+static MATH_CHAR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"[\u{2200}-\u{22FF}\u{2A00}-\u{2AFF}\u{03B1}-\u{03C9}\u{0391}-\u{03A9}∑∫∏√∞±×÷≠≤≥≈∈∉⊂⊃∪∩→←↔⇒⇐⇔]",
+    )
+    .unwrap()
+});
+
+/// Regex pattern for math-like structures (equations, subscripts, superscripts)
+static MATH_STRUCTURE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?x)
+        # Variable = expression pattern
+        [a-zA-Z]\s*[=<>≤≥≈]\s*[a-zA-Z0-9]
+        |
+        # Subscript/superscript Unicode characters
+        [⁰¹²³⁴⁵⁶⁷⁸⁹ⁿ⁺⁻₀₁₂₃₄₅₆₇₈₉ₙ]
+        |
+        # Fraction-like patterns
+        \d+\s*/\s*\d+
+        |
+        # Function notation f(x), g(y), etc.
+        [a-zA-Z]\s*\(\s*[a-zA-Z]\s*\)
+        |
+        # Summation/product notation patterns
+        \bsum\b|\bprod\b|\bint\b|\blim\b
+    ",
+    )
+    .unwrap()
+});
+
+/// Regex pattern for inline math expression boundaries
+static INLINE_MATH_BOUNDARY: LazyLock<Regex> = LazyLock::new(|| {
+    // Matches sequences containing math symbols/structures surrounded by word boundaries
+    Regex::new(
+        r"(?x)
+        # Sequence with math symbols and alphanumeric characters
+        (?:
+            (?:[a-zA-Z0-9]+\s*)?
+            [\u{2200}-\u{22FF}\u{2A00}-\u{2AFF}\u{03B1}-\u{03C9}\u{0391}-\u{03A9}=<>≤≥≈∑∫∏√∞±×÷≠∈∉⊂⊃∪∩→←↔⇒⇐⇔\^_{}()\[\]]
+            (?:\s*[a-zA-Z0-9\^_{}()\[\]]+)*
+        )+
+    ",
+    )
+    .unwrap()
+});
 
 const MATH_EXTRACTION_PROMPT: &str = r#"You are an academic paper text extractor. Extract ALL text from this page image.
 
@@ -171,4 +221,197 @@ pub fn merge_sections(
     }
 
     merged
+}
+
+/// Check if a text segment contains math-like content.
+///
+/// # Arguments
+///
+/// * `text` - The text segment to analyze.
+///
+/// # Returns
+///
+/// `true` if the text contains math symbols or structures.
+pub fn contains_math(text: &str) -> bool {
+    MATH_CHAR_PATTERN.is_match(text) || MATH_STRUCTURE_PATTERN.is_match(text)
+}
+
+/// Apply heuristic math markup to text using `<math>...</math>` tags.
+///
+/// This function detects inline math expressions and wraps them with math tags.
+/// It uses pattern matching to identify:
+/// - Unicode math symbols (Greek letters, operators, etc.)
+/// - Equation-like structures (a = b, f(x), etc.)
+/// - Fraction patterns (1/2, etc.)
+///
+/// # Arguments
+///
+/// * `text` - The text to process.
+///
+/// # Returns
+///
+/// The text with math expressions wrapped in `<math>...</math>` tags.
+pub fn mark_math_heuristic(text: &str) -> String {
+    if text.is_empty() || !contains_math(text) {
+        return text.to_string();
+    }
+
+    let mut result = String::with_capacity(text.len() * 2);
+    let mut last_end = 0;
+
+    // Find all math-like segments
+    for mat in INLINE_MATH_BOUNDARY.find_iter(text) {
+        let start = mat.start();
+        let end = mat.end();
+        let matched = mat.as_str().trim();
+
+        // Skip very short matches or matches that are just numbers
+        if matched.len() < 2 || matched.chars().all(|c| c.is_ascii_digit()) {
+            result.push_str(&text[last_end..end]);
+            last_end = end;
+            continue;
+        }
+
+        // Only mark if it contains actual math content
+        if MATH_CHAR_PATTERN.is_match(matched) || MATH_STRUCTURE_PATTERN.is_match(matched) {
+            // Add text before this match
+            result.push_str(&text[last_end..start]);
+            // Wrap match in math tags
+            result.push_str("<math>");
+            result.push_str(matched);
+            result.push_str("</math>");
+        } else {
+            // No math content, keep as-is
+            result.push_str(&text[last_end..end]);
+        }
+        last_end = end;
+    }
+
+    // Add remaining text
+    result.push_str(&text[last_end..]);
+    result
+}
+
+/// Apply heuristic math markup to all blocks in pages.
+///
+/// This function iterates through all blocks and creates math-marked versions
+/// of their text content.
+///
+/// # Arguments
+///
+/// * `pages` - A mutable reference to the pages to process.
+///
+/// # Returns
+///
+/// A map of (page_number, block_index) to math-marked text.
+pub fn apply_heuristic_math_markup(
+    pages: &[Page],
+) -> std::collections::HashMap<(PageNumber, usize), String> {
+    let mut math_texts: std::collections::HashMap<(PageNumber, usize), String> =
+        std::collections::HashMap::new();
+
+    for page in pages {
+        for (block_idx, block) in page.blocks.iter().enumerate() {
+            let text = block.get_text();
+            let marked = mark_math_heuristic(&text);
+
+            // Only store if math was actually marked
+            if marked != text {
+                math_texts.insert((page.page_number, block_idx), marked);
+            }
+        }
+    }
+
+    math_texts
+}
+
+/// Convert LLM LaTeX math notation ($...$, $$...$$) to our custom math tags.
+///
+/// # Arguments
+///
+/// * `text` - Text containing LaTeX-style math notation.
+///
+/// # Returns
+///
+/// Text with math notation converted to `<math>...</math>` tags.
+pub fn convert_latex_to_math_tags(text: &str) -> String {
+    // Convert display math first ($$...$$)
+    let display_re = Regex::new(r"\$\$([^$]+)\$\$").unwrap();
+    let result = display_re.replace_all(text, r#"<math display="block">$1</math>"#);
+
+    // Then convert inline math ($...$)
+    let inline_re = Regex::new(r"\$([^$]+)\$").unwrap();
+    let result = inline_re.replace_all(&result, "<math>$1</math>");
+
+    result.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_contains_math() {
+        // Text with Greek letters
+        assert!(contains_math(
+            "The variable α represents the learning rate."
+        ));
+        // Text with operators
+        assert!(contains_math("We have a ≤ b and x ∈ S."));
+        // Equation pattern
+        assert!(contains_math("Given f(x) = ax + b"));
+        // Fraction
+        assert!(contains_math("The ratio is 1/2."));
+        // No math
+        assert!(!contains_math("This is a normal sentence."));
+    }
+
+    #[test]
+    fn test_mark_math_heuristic_greek() {
+        let text = "The variable α represents the learning rate.";
+        let marked = mark_math_heuristic(text);
+        assert!(marked.contains("<math>"));
+        assert!(marked.contains("α"));
+        assert!(marked.contains("</math>"));
+    }
+
+    #[test]
+    fn test_mark_math_heuristic_operators() {
+        let text = "We have a ≤ b.";
+        let marked = mark_math_heuristic(text);
+        assert!(marked.contains("<math>"));
+    }
+
+    #[test]
+    fn test_mark_math_heuristic_no_math() {
+        let text = "This is a normal sentence with no math.";
+        let marked = mark_math_heuristic(text);
+        assert_eq!(marked, text);
+        assert!(!marked.contains("<math>"));
+    }
+
+    #[test]
+    fn test_convert_latex_to_math_tags_inline() {
+        let text = "The equation $f(x) = ax^2$ represents a parabola.";
+        let converted = convert_latex_to_math_tags(text);
+        assert!(converted.contains("<math>f(x) = ax^2</math>"));
+        assert!(!converted.contains("$"));
+    }
+
+    #[test]
+    fn test_convert_latex_to_math_tags_display() {
+        let text = "The equation is:\n$$\\sum_{i=1}^{n} x_i$$\nwhich represents...";
+        let converted = convert_latex_to_math_tags(text);
+        assert!(converted.contains(r#"<math display="block">"#));
+        assert!(converted.contains("</math>"));
+        assert!(!converted.contains("$$"));
+    }
+
+    #[test]
+    fn test_convert_latex_to_math_tags_mixed() {
+        let text = "Inline $a$ and display $$b$$";
+        let converted = convert_latex_to_math_tags(text);
+        assert!(converted.contains("<math>a</math>"));
+        assert!(converted.contains(r#"<math display="block">b</math>"#));
+    }
 }
