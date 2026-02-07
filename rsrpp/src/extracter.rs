@@ -64,6 +64,8 @@ pub fn extract_tables(image_path: &str, tables: &mut Vec<Coordinate>, width: i32
         lines_gpd_by_len.get_mut(&len).unwrap().push(line);
     }
 
+    let page_area = (width * height) as f32;
+
     for line in lines_gpd_by_len.values() {
         if line.len() < 3 {
             continue;
@@ -85,7 +87,13 @@ pub fn extract_tables(image_path: &str, tables: &mut Vec<Coordinate>, width: i32
             y_values.first(),
             y_values.last(),
         ) {
-            tables.push(Coordinate::from_rect(x1, y1, x2, y2));
+            let table_coord = Coordinate::from_rect(x1, y1, x2, y2);
+            // Skip table regions covering > 50% of page — likely false positives
+            // from chart gridlines, figure borders, etc.
+            if page_area > 0.0 && table_coord.get_area() / page_area > 0.5 {
+                continue;
+            }
+            tables.push(table_coord);
         }
     }
 }
@@ -112,6 +120,31 @@ pub fn get_text_area(pages: &Vec<Page>) -> Coordinate {
     let right = sci_rs::stats::median(right_values.iter()).0;
     let top = sci_rs::stats::median(top_values.iter()).0;
     let bottom = sci_rs::stats::median(bottom_values.iter()).0;
+
+    let (page_width, page_height) = pages
+        .first()
+        .map(|p| (p.width, p.height))
+        .unwrap_or((595.0, 842.0));
+
+    let area_width = right - left;
+    let area_height = bottom - top;
+
+    // If the computed text area is degenerate (too small relative to the page),
+    // fall back to the full page dimensions to avoid filtering out all body blocks.
+    if left_values.is_empty()
+        || area_height < page_height * 0.2
+        || area_width < page_width * 0.2
+    {
+        return Coordinate {
+            top_left: Point { x: 0.0, y: 0.0 },
+            top_right: Point { x: page_width, y: 0.0 },
+            bottom_left: Point { x: 0.0, y: page_height },
+            bottom_right: Point {
+                x: page_width,
+                y: page_height,
+            },
+        };
+    }
 
     return Coordinate {
         top_left: Point { x: left, y: top },

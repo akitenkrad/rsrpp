@@ -423,7 +423,9 @@ pub(crate) fn save_pdf_as_xml(
     };
     let mut page_number: PageNumber = 0;
     let mut start_paper = false;
+    let mut start_paper_at: Option<usize> = None; // index in pending_sections when "abstract" was seen
     let mut probably_title = false;
+    let mut pending_sections: Vec<(PageNumber, String)> = Vec::new();
     let regex_is_number = regex::Regex::new(r"^\d+$").unwrap();
     let regex_trim_number = regex::Regex::new(r"^\d+\.?\s*").unwrap();
     let mut reader = quick_xml::Reader::from_str(&xml_text);
@@ -463,18 +465,20 @@ pub(crate) fn save_pdf_as_xml(
 
                 if text.to_lowercase().trim() == "abstract" {
                     start_paper = true;
+                    // Record current pending length so we know where "abstract" appeared
+                    // relative to title-font entries. If "abstract" itself is title-font,
+                    // it will be pushed next (at this index). If not, the next title-font
+                    // text will land at this index.
+                    if start_paper_at.is_none() {
+                        start_paper_at = Some(pending_sections.len());
+                    }
                 }
 
                 if probably_title {
-                    if !start_paper {
-                        continue;
-                    }
-
                     if cfg!(test) {
-                        tracing::info!("Found section title: {}", text);
+                        tracing::info!("Found section title (p{}): {}", page_number, text);
                     }
-
-                    config.sections.push((page_number, text.to_string()));
+                    pending_sections.push((page_number, text.to_string()));
                 }
             }
             Ok(Event::Eof) => {
@@ -484,6 +488,38 @@ pub(crate) fn save_pdf_as_xml(
                 break;
             }
             _ => {}
+        }
+    }
+
+    // Evaluate buffered sections after loop
+    if start_paper {
+        // Normal path: "Abstract" heading found — keep sections from that point onward.
+        // start_paper_at records the pending_sections index at the moment "abstract" was seen.
+        // If "abstract" was in title font, it's at that index; if not, the next title-font
+        // entry starts there. This replicates the original behavior where start_paper=true
+        // caused all subsequent title-font texts to be pushed directly.
+        let skip = start_paper_at.unwrap_or(0);
+        for section in pending_sections.into_iter().skip(skip) {
+            config.sections.push(section);
+        }
+    } else if !pending_sections.is_empty() {
+        // Fallback: no "Abstract" heading (e.g. Nature format)
+        // Start from the first anchor-word match
+        let first_anchor_idx = pending_sections.iter().position(|(_, text)| {
+            let t = text.to_lowercase();
+            let s = regex_trim_number.replace(&t, "").trim().to_string();
+            anchor_words.iter().any(|&aw| aw == t.as_str() || aw == s.as_str())
+        });
+
+        if let Some(idx) = first_anchor_idx {
+            // If the first anchor section is beyond page 1, infer an Abstract on page 1
+            let first_page = pending_sections[idx].0;
+            if first_page > 1 {
+                config.sections.push((1, "Abstract".to_string()));
+            }
+            for section in pending_sections.into_iter().skip(idx) {
+                config.sections.push(section);
+            }
         }
     }
 

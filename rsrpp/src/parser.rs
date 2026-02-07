@@ -36,6 +36,8 @@ where
 
 pub(crate) fn parse_html2pages(config: &mut ParserConfig, html: html::Html) -> Result<Vec<Page>> {
     let mut pages = Vec::new();
+    let section_title_regex = regex::Regex::new(r"^\d+\.?\s*").unwrap();
+    let whitespace_regex = regex::Regex::new(r"\s+").unwrap();
     let page_selector = scraper::Selector::parse("page").unwrap();
     let _pages = html.select(&page_selector);
     for (_page_number, page) in _pages.enumerate() {
@@ -85,11 +87,25 @@ pub(crate) fn parse_html2pages(config: &mut ParserConfig, html: html::Html) -> R
                     line_ymax - line_ymin,
                 );
 
-                for table in _page.tables.iter() {
-                    let line_coord =
-                        Coordinate::from_object(_line.x, _line.y, _line.width, _line.height);
-                    if line_coord.is_contained_in(&table) {
-                        continue 'line_iter;
+                // Exempt known section titles from table filtering.
+                // Section titles are detected via font analysis (high confidence),
+                // so they should not be discarded by geometric table overlap.
+                let line_text: String = line.text().collect::<String>();
+                let line_text_normalized =
+                    whitespace_regex.replace_all(line_text.trim(), " ").to_string();
+                let line_text_stripped =
+                    section_title_regex.replace(&line_text_normalized, "").trim().to_string();
+                let is_section_title = config.sections.iter().any(|(_, section)| {
+                    line_text_stripped.to_lowercase() == section.to_lowercase()
+                });
+
+                if !is_section_title {
+                    for table in _page.tables.iter() {
+                        let line_coord =
+                            Coordinate::from_object(_line.x, _line.y, _line.width, _line.height);
+                        if line_coord.is_contained_in(&table) {
+                            continue 'line_iter;
+                        }
                     }
                 }
 
@@ -844,56 +860,51 @@ mod tests {
         let mut config = ParserConfig::new();
         let result = parse(filepath.to_str().unwrap(), &mut config, true).await;
 
-        // With full text extraction mode, the paper should parse successfully
+        // Paper has no "Abstract" heading but has standard section titles.
+        // The fallback section detection should find sections via anchor-word matching.
         let pages =
-            result.expect("Zep paper should parse successfully with full text extraction mode");
+            result.expect("Zep paper should parse successfully");
 
         tracing::info!("Zep paper parsed successfully with {} pages", pages.len());
         assert!(pages.len() > 0, "Should have at least one page");
 
-        // Verify that sections are empty (non-standard format)
+        // Verify that sections are detected via fallback (no Abstract, but anchor words found)
         assert!(
-            config.sections.is_empty(),
-            "Zep paper should have no detected sections (non-standard format)"
+            !config.sections.is_empty(),
+            "Zep paper should have sections detected via fallback"
+        );
+        let section_names: Vec<&str> = config.sections.iter().map(|(_, s)| s.as_str()).collect();
+        tracing::info!("Detected sections: {:?}", section_names);
+
+        // Should detect standard sections like Introduction, Conclusion, References
+        assert!(
+            section_names.iter().any(|s| s.to_lowercase() == "introduction"),
+            "Should detect Introduction section, got: {:?}", section_names
         );
 
-        // Verify that all blocks are assigned to "Content" section
+        // Verify that blocks are assigned to sections
         let mut total_blocks = 0;
-        let mut content_blocks = 0;
         for page in &pages {
             for block in &page.blocks {
                 total_blocks += 1;
-                if block.section == "Content" {
-                    content_blocks += 1;
-                }
+                assert!(
+                    !block.section.is_empty(),
+                    "All blocks should have a section assigned"
+                );
             }
         }
         assert!(total_blocks > 0, "Should have at least one block");
-        assert_eq!(
-            total_blocks, content_blocks,
-            "All blocks should be assigned to 'Content' section in full text mode"
-        );
-        tracing::info!(
-            "Full text extraction: {} blocks assigned to 'Content' section",
-            content_blocks
-        );
+        tracing::info!("Total blocks with sections: {}", total_blocks);
 
-        // Verify that Section::from_pages produces a Content section with text
+        // Verify that Section::from_pages produces sections with text
         let sections = Section::from_pages(&pages);
         assert!(sections.len() >= 1, "Should have at least one section");
-        let content_section = sections.iter().find(|s| s.title == "Content");
-        assert!(
-            content_section.is_some(),
-            "Should have a 'Content' section in full text mode"
-        );
-        let content_section = content_section.unwrap();
-        assert!(
-            !content_section.contents.is_empty(),
-            "Content section should have text"
-        );
+        let total_content: usize = sections.iter().map(|s| s.contents.len()).sum();
+        assert!(total_content > 0, "Sections should have content");
         tracing::info!(
-            "Content section has {} lines of text",
-            content_section.contents.len()
+            "Produced {} sections with {} total content blocks",
+            sections.len(),
+            total_content
         );
 
         let _ = config.clean_files();
