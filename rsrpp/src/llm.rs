@@ -262,32 +262,50 @@ pub async fn validate_sections(first_pages_images: &[String]) -> Result<Vec<Stri
 /// Merge font-based section detection results with LLM-validated sections.
 ///
 /// Strategy:
-/// - LLM results are treated as ground truth for section names
-/// - Page numbers are inherited from font-based results where matching
-/// - Sections found by LLM but not by font-based detection get page_number = -1
-///   (matched by text only in parse_extract_section_text)
-/// - Sections found by font-based but not LLM are excluded (likely false positives)
+/// - Font-based sections within the LLM page range are validated against LLM results:
+///   confirmed sections are kept, unconfirmed ones are excluded (likely false positives).
+/// - Font-based sections outside the LLM page range are preserved as-is,
+///   since the LLM never saw those pages and cannot confirm or deny them.
+/// - Sections found by LLM but not matched by any font-based section get page_number = -1
+///   (matched by text only in parse_extract_section_text).
+///
+/// # Arguments
+///
+/// * `font_based` - Sections detected by font analysis, with (page_number, name).
+/// * `llm_sections` - Section names returned by the LLM.
+/// * `llm_page_range` - Inclusive page range (start, end) that the LLM examined.
 pub fn merge_sections(
     font_based: &[(PageNumber, String)],
     llm_sections: &[String],
+    llm_page_range: (PageNumber, PageNumber),
 ) -> Vec<(PageNumber, String)> {
-    let mut merged: Vec<(PageNumber, String)> = Vec::new();
+    let mut result: Vec<(PageNumber, String)> = Vec::new();
+    let mut used_llm_sections: HashSet<String> = HashSet::new();
 
-    for llm_section in llm_sections {
-        let llm_lower = llm_section.to_lowercase();
-
-        // Find matching font-based section
-        let font_match = font_based.iter().find(|(_, name)| name.to_lowercase() == llm_lower);
-
-        if let Some((page, _)) = font_match {
-            merged.push((*page, llm_section.clone()));
+    // Step 1: Process font-based sections
+    for (page, name) in font_based {
+        if *page >= llm_page_range.0 && *page <= llm_page_range.1 {
+            // Within LLM range — check if LLM confirmed this section
+            if llm_sections.iter().any(|s| s.to_lowercase() == name.to_lowercase()) {
+                result.push((*page, name.clone()));
+                used_llm_sections.insert(name.to_lowercase());
+            }
+            // else: LLM didn't confirm — exclude (likely false positive)
         } else {
-            // LLM found it but font-based didn't → add with page = -1 for text-only matching
-            merged.push((-1, llm_section.clone()));
+            // Outside LLM range — trust font-based result
+            result.push((*page, name.clone()));
+            used_llm_sections.insert(name.to_lowercase());
         }
     }
 
-    merged
+    // Step 2: Add LLM-only sections (found by LLM but not matched by any font-based)
+    for llm_section in llm_sections {
+        if !used_llm_sections.contains(&llm_section.to_lowercase()) {
+            result.push((-1, llm_section.clone()));
+        }
+    }
+
+    result
 }
 
 /// Extract structured references from a References section using LLM.

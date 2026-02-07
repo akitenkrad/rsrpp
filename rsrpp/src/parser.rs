@@ -431,7 +431,8 @@ pub async fn parse(
 
         match llm::validate_sections(&first_page_images).await {
             Ok(llm_sections) if !llm_sections.is_empty() => {
-                let merged = llm::merge_sections(&config.sections, &llm_sections);
+                let llm_page_range = (1, max_pages as PageNumber);
+                let merged = llm::merge_sections(&config.sections, &llm_sections, llm_page_range);
                 if verbose {
                     tracing::info!(
                         "LLM section validation: {} font-based → {} merged sections",
@@ -1036,9 +1037,13 @@ mod tests {
             "Appendix".to_string(), // LLM found this too
         ];
 
-        let merged = llm::merge_sections(&font_based, &llm_sections);
+        // LLM saw pages 1-3
+        let merged = llm::merge_sections(&font_based, &llm_sections, (1, 3));
 
-        // Should have all LLM sections
+        // Within LLM range (1-3): Abstract(1), Introduction(1), Method(3) confirmed → kept
+        // Outside LLM range: Conclusion(5), References(6) → preserved as-is
+        // LLM-only: Related Work, Appendix → page = -1
+        // Total: 3 + 2 + 2 = 7
         assert_eq!(merged.len(), llm_sections.len());
 
         // "Related Work" and "Appendix" should have page_number = -1
@@ -1051,6 +1056,84 @@ mod tests {
         // Font-based sections should keep their page numbers
         let intro = merged.iter().find(|(_, s)| s == "Introduction").unwrap();
         assert_eq!(intro.0, 1, "Font-based section should keep page number");
+
+        // Sections outside LLM range should be preserved with original page numbers
+        let conclusion = merged.iter().find(|(_, s)| s == "Conclusion").unwrap();
+        assert_eq!(conclusion.0, 5, "Section outside LLM range should keep page number");
+
+        let references = merged.iter().find(|(_, s)| s == "References").unwrap();
+        assert_eq!(references.0, 6, "Section outside LLM range should keep page number");
+    }
+
+    /// Test that merge_sections preserves sections outside LLM page range.
+    #[test]
+    fn test_merge_sections_preserves_unseen_pages() {
+        let font_based: Vec<(PageNumber, String)> = vec![
+            (1, "Abstract".to_string()),
+            (1, "Introduction".to_string()),
+            (3, "Method".to_string()),
+            (5, "Results".to_string()),
+            (7, "Discussion".to_string()),
+            (10, "Conclusion".to_string()),
+            (12, "References".to_string()),
+        ];
+
+        // LLM only saw pages 1-3
+        let llm_sections = vec![
+            "Abstract".to_string(),
+            "Introduction".to_string(),
+            "Methods".to_string(), // slightly different name from font-based "Method"
+        ];
+
+        let merged = llm::merge_sections(&font_based, &llm_sections, (1, 3));
+
+        // Within LLM range: Abstract(1), Introduction(1) confirmed; Method(3) NOT confirmed by LLM (name mismatch)
+        // Outside LLM range: Results(5), Discussion(7), Conclusion(10), References(12) preserved
+        // LLM-only: Methods → page = -1
+        let section_names: Vec<&str> = merged.iter().map(|(_, s)| s.as_str()).collect();
+        assert!(section_names.contains(&"Abstract"));
+        assert!(section_names.contains(&"Introduction"));
+        assert!(!section_names.contains(&"Method"), "Method should be excluded — LLM has 'Methods' not 'Method'");
+        assert!(section_names.contains(&"Methods"), "LLM-only 'Methods' should be added");
+        assert!(section_names.contains(&"Results"), "Outside LLM range — should be preserved");
+        assert!(section_names.contains(&"Discussion"), "Outside LLM range — should be preserved");
+        assert!(section_names.contains(&"Conclusion"), "Outside LLM range — should be preserved");
+        assert!(section_names.contains(&"References"), "Outside LLM range — should be preserved");
+
+        // Results should keep page number 5
+        let results = merged.iter().find(|(_, s)| s == "Results").unwrap();
+        assert_eq!(results.0, 5);
+
+        // Methods (LLM-only) should have page = -1
+        let methods = merged.iter().find(|(_, s)| s == "Methods").unwrap();
+        assert_eq!(methods.0, -1);
+    }
+
+    /// Test that merge_sections filters within LLM range.
+    #[test]
+    fn test_merge_sections_filters_within_range() {
+        let font_based: Vec<(PageNumber, String)> = vec![
+            (1, "Abstract".to_string()),
+            (1, "INTRODUCTION".to_string()), // different case
+            (2, "Some Noise".to_string()),   // false positive
+            (3, "Method".to_string()),
+        ];
+
+        let llm_sections = vec![
+            "Abstract".to_string(),
+            "Introduction".to_string(),
+            "Method".to_string(),
+        ];
+
+        // LLM saw all pages (1-3)
+        let merged = llm::merge_sections(&font_based, &llm_sections, (1, 3));
+
+        let section_names: Vec<String> = merged.iter().map(|(_, s)| s.to_lowercase()).collect();
+        assert!(section_names.contains(&"abstract".to_string()));
+        assert!(section_names.contains(&"introduction".to_string()));
+        assert!(section_names.contains(&"method".to_string()));
+        assert!(!section_names.contains(&"some noise".to_string()), "False positive should be filtered out");
+        assert_eq!(merged.len(), 3);
     }
 
     /// Test LLM extraction when API key is available (conditional test).

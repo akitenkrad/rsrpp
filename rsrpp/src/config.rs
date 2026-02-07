@@ -76,7 +76,7 @@ impl ParserConfig {
             pdf_xml_path: pdf_raw_html_path,
             sections: sections,
             pdf_info: HashMap::new(),
-            use_llm: false,
+            use_llm: true,
             math_texts: HashMap::new(),
             extract_references: false,
             references: Vec::new(),

@@ -68,8 +68,8 @@ async fn main() {
     );
 
     let mut config = ParserConfig::new();
-    if !args.no_llm {
-        config.use_llm = true;
+    if args.no_llm {
+        config.use_llm = false;
     }
     if args.extract_references {
         config.extract_references = true;
