@@ -58,6 +58,11 @@ License: MIT
 <details open>
 <summary>1.0.24</summary>
 
+- Fixed body text loss in Nature-format and non-standard papers:
+  - Added section detection fallback for papers without "Abstract" heading using anchor-word matching
+  - Added text area degenerate detection to prevent filtering out all blocks
+  - Capped table detection regions at 50% of page area to reject false positives from chart gridlines
+  - Exempted known section titles from table-region filtering
 - Improved math extraction accuracy:
   - Fixed critical bug where LLM-extracted math text was discarded; added trigram-based block alignment
   - Reduced false positives: dates, statistics, section/figure references

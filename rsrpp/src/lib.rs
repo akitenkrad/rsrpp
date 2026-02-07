@@ -5,6 +5,7 @@
 //! ## Features
 //!
 //! - Extract structured text from PDF papers (sections, paragraphs)
+//! - Robust section detection with fallback for non-standard formats (Nature, etc.)
 //! - Detect and separate figure/table captions
 //! - Math expression detection and LaTeX-formatted markup (heuristic + LLM with trigram alignment)
 //! - **Structured reference extraction** (LLM-based, requires `OPENAI_API_KEY`)

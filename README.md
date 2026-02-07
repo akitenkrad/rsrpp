@@ -215,10 +215,12 @@ RSRPP consists of the following modules:
 
 - **`extracter`**: Figure and table extraction functionality
   - Figure detection using OpenCV
-  - Table region identification and exclusion
+  - Table region identification and exclusion (with area cap to reject false positives)
+  - Text area degenerate detection with full-page fallback
 
 - **`converter`**: Format conversion functionality
   - Page to section conversion
+  - Section detection with fallback for non-standard formats (anchor-word matching)
   - JSON output generation
 
 - **`config`**: Configuration management
@@ -309,6 +311,11 @@ Note: This project is based on rsrpp by Aki.
 <details open>
 <summary>1.0.24</summary>
 
+- Fixed body text loss in Nature-format and non-standard papers:
+  - Added section detection fallback for papers without "Abstract" heading (e.g., Nature format) using anchor-word matching
+  - Added text area degenerate detection to prevent filtering out all blocks when computed text area is too small
+  - Capped table detection regions at 50% of page area to reject false positives from chart gridlines and figure borders
+  - Exempted known section titles from table-region filtering
 - Improved math extraction accuracy:
   - Fixed critical bug where LLM-extracted math text was discarded; added trigram-based block alignment
   - Reduced false positives: dates (`2019/2020`), statistics (`n = 50 participants`), section references

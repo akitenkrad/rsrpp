@@ -39,6 +39,9 @@ Options:
 <details open>
 <summary>1.0.24</summary>
 
+- Fixed body text loss in Nature-format and non-standard papers:
+  - Added section detection fallback for papers without "Abstract" heading
+  - Capped table detection regions at 50% of page area to reject false positives
 - Improved math extraction accuracy:
   - Fixed LLM math extraction alignment bug
   - Reduced false positives and false negatives in heuristic math detection
