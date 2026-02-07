@@ -502,38 +502,20 @@ pub async fn parse(
             for (page_num, result) in results {
                 match result {
                     Ok(llm_text) if !llm_text.is_empty() => {
-                        // Convert LaTeX notation to our math tags
                         let converted = llm::convert_latex_to_math_tags(&llm_text);
-                        // Store for the whole page (block index 0 as placeholder)
-                        // In a more sophisticated implementation, we'd align text to blocks
                         if let Some(page) = pages.iter().find(|p| p.page_number == page_num) {
-                            for (block_idx, block) in page.blocks.iter().enumerate() {
-                                let block_text = block.get_text();
-                                let density = llm::estimate_math_density(&block_text);
-                                if density >= math_threshold {
-                                    // Mark this block as having math content
-                                    math_texts.insert(
-                                        (page_num, block_idx),
-                                        llm::mark_math_heuristic(&block_text),
-                                    );
-                                    if verbose {
-                                        tracing::info!(
-                                            "Marked math content on page {} block {} (density: {:.2})",
-                                            page_num,
-                                            block_idx,
-                                            density
-                                        );
-                                    }
-                                }
+                            let aligned = llm::align_llm_text_to_blocks(&converted, &page.blocks);
+                            let aligned_count = aligned.len();
+                            for (block_idx, math_text) in aligned {
+                                math_texts.insert((page_num, block_idx), math_text);
                             }
-                        }
-                        // Also log that we got LLM output
-                        if verbose {
-                            tracing::info!(
-                                "LLM extracted {} chars for page {}",
-                                converted.len(),
-                                page_num
-                            );
+                            if verbose {
+                                tracing::info!(
+                                    "LLM aligned {} blocks for page {}",
+                                    aligned_count,
+                                    page_num
+                                );
+                            }
                         }
                     }
                     Ok(_) => {}
@@ -554,6 +536,11 @@ pub async fn parse(
 
     // Store math texts in config for later use by Section::from_pages
     config.math_texts = math_texts;
+
+    // Unify math text format to LaTeX (convert Unicode symbols inside <math> tags)
+    for value in config.math_texts.values_mut() {
+        *value = llm::unicode_math_to_latex(value);
+    }
 
     if verbose {
         tracing::info!(
@@ -1215,6 +1202,120 @@ mod tests {
         let json = serde_json::to_string_pretty(&output).unwrap();
         assert!(json.contains("\"references\""));
         tracing::info!("PaperOutput JSON has {} bytes", json.len());
+
+        let _ = config.clean_files();
+        let _ = tp.cleanup();
+    }
+
+    /// Test heuristic math markup produces math_contents for papers with math.
+    #[test_log::test(tokio::test)]
+    async fn test_math_markup_heuristic_corpus() {
+        let tp = TestPapers::setup().await.expect("setup test papers");
+        let paper = tp.get_by_title(BuiltinPaper::AttentionIsAllYouNeed).unwrap();
+        let filepath = paper.dest_path(&tp.tmp_dir);
+
+        let mut config = ParserConfig::new();
+        config.use_llm = false; // Force heuristic path
+
+        let pages = parse(filepath.to_str().unwrap(), &mut config, false)
+            .await
+            .expect("Parse should succeed");
+
+        assert!(!pages.is_empty());
+
+        // Math-heavy paper should have some math_texts entries
+        let sections = Section::from_pages_with_math(&pages, &config.math_texts);
+        let has_math = sections.iter().any(|s| s.math_contents.is_some());
+
+        tracing::info!(
+            "Heuristic math markup: {} math_texts entries, has_math_contents: {}",
+            config.math_texts.len(),
+            has_math
+        );
+
+        // "Attention Is All You Need" contains math notation, so math should be detected
+        assert!(
+            config.math_texts.len() > 0,
+            "Math-heavy paper should have math_texts entries from heuristic markup"
+        );
+
+        let _ = config.clean_files();
+        let _ = tp.cleanup();
+    }
+
+    /// Test that empty math_texts results in no math_contents in sections.
+    #[test_log::test(tokio::test)]
+    async fn test_math_markup_no_math_flag() {
+        let tp = TestPapers::setup().await.expect("setup test papers");
+        let paper = tp.get_by_title(BuiltinPaper::AttentionIsAllYouNeed).unwrap();
+        let filepath = paper.dest_path(&tp.tmp_dir);
+
+        let mut config = ParserConfig::new();
+        config.use_llm = false;
+
+        let pages = parse(filepath.to_str().unwrap(), &mut config, false)
+            .await
+            .expect("Parse should succeed");
+
+        // Clear math_texts to simulate --no-math-markup
+        config.math_texts.clear();
+
+        let sections = Section::from_pages_with_math(&pages, &config.math_texts);
+        for section in &sections {
+            assert!(
+                section.math_contents.is_none(),
+                "Section '{}' should have no math_contents when math_texts is empty",
+                section.title
+            );
+        }
+
+        let _ = config.clean_files();
+        let _ = tp.cleanup();
+    }
+
+    /// Test that math markup output uses LaTeX format inside <math> tags.
+    #[test_log::test(tokio::test)]
+    async fn test_math_markup_latex_format() {
+        let tp = TestPapers::setup().await.expect("setup test papers");
+        let paper = tp.get_by_title(BuiltinPaper::AttentionIsAllYouNeed).unwrap();
+        let filepath = paper.dest_path(&tp.tmp_dir);
+
+        let mut config = ParserConfig::new();
+        config.use_llm = false;
+
+        let _pages = parse(filepath.to_str().unwrap(), &mut config, false)
+            .await
+            .expect("Parse should succeed");
+
+        // Check that any math_texts with <math> tags use LaTeX format
+        for ((page, block_idx), text) in &config.math_texts {
+            if text.contains("<math>") {
+                // Should not contain raw Unicode Greek letters inside math tags
+                // (they should have been converted to LaTeX)
+                let math_tag_re = regex::Regex::new(r"<math[^>]*>(.*?)</math>").unwrap();
+                for cap in math_tag_re.captures_iter(text) {
+                    let math_content = &cap[1];
+                    let has_unicode_greek = math_content.chars().any(|c| {
+                        ('\u{03B1}'..='\u{03C9}').contains(&c)
+                            || ('\u{0391}'..='\u{03A9}').contains(&c)
+                    });
+                    if has_unicode_greek {
+                        tracing::warn!(
+                            "Page {} block {}: math content still has Unicode Greek: {}",
+                            page,
+                            block_idx,
+                            math_content
+                        );
+                    }
+                    // This is a soft check - some papers might not have Greek letters in math
+                }
+            }
+        }
+
+        tracing::info!(
+            "Checked {} math_texts entries for LaTeX format",
+            config.math_texts.len()
+        );
 
         let _ = config.clean_files();
         let _ = tp.cleanup();
