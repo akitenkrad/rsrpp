@@ -37,6 +37,16 @@ Options:
 ## Releases
 
 <details open>
+<summary>1.0.24</summary>
+
+- Improved math extraction accuracy:
+  - Fixed LLM math extraction alignment bug
+  - Reduced false positives and false negatives in heuristic math detection
+  - Unified math output to LaTeX format inside `<math>` tags
+
+</details>
+
+<details>
 <summary>1.0.21</summary>
 
 - Fixed panic-causing unwrap() calls with proper error handling.

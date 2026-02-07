@@ -157,15 +157,29 @@ The parser outputs JSON with the following structure:
 
 ### Math Markup
 
-Math expressions are detected using:
-- Greek letters (α, β, γ, etc.)
-- Mathematical operators (∑, ∏, ∫, etc.)
-- Common math patterns (equations, subscripts, superscripts)
+Math expressions are detected using a multi-layered approach:
 
-Detected expressions are wrapped in `<math>...</math>` tags:
+1. **LLM path** (when `OPENAI_API_KEY` is set): Extracts math via vision LLM, then aligns results to individual text blocks using trigram-based fuzzy matching
+2. **Heuristic path** (fallback): Pattern-based detection with context analysis
+
+Detected patterns include:
+- Greek letters (α, β, γ, etc.)
+- Mathematical operators (∑, ∏, ∫, ≤, ≥, ∈, etc.)
+- Multi-character math functions (`sin(x)`, `cos(θ)`, `log(n)`, etc.)
+- ASCII exponents and subscripts (`x^2`, `x_i`, `a_{n+1}`)
+- Letter fractions (`a/b`)
+- Norm notation (`||w||`)
+- Common equation patterns with context-based validation
+
+False positive filtering excludes:
+- Date patterns (`2019/2020`)
+- Statistical reporting (`n = 50 participants`)
+- Section/figure references (`Section 3.1`, `Figure 2`)
+
+All math output is unified to **LaTeX format** inside `<math>...</math>` tags:
 ```
-Original: "The loss function L = Σ(yi - ŷi)²"
-Marked:   "The loss function <math>L = Σ(yi - ŷi)²</math>"
+Original: "The learning rate α converges when x^2 ≤ β"
+Marked:   "The learning rate <math>\alpha</math> converges when <math>x^2 \leq \beta</math>"
 ```
 
 ## 📚 Architecture
@@ -193,8 +207,10 @@ RSRPP consists of the following modules:
   - Block type classification (Body, Caption, Header)
 
 - **`llm`**: LLM-enhanced processing and math detection
-  - Math expression detection using Unicode patterns and heuristics
-  - `<math>...</math>` tag insertion for detected math expressions
+  - Math expression detection using Unicode patterns, structural heuristics, and context analysis
+  - LLM-based math extraction with trigram alignment to text blocks
+  - False positive filtering (dates, statistics, section references)
+  - Unicode-to-LaTeX conversion for unified `<math>...</math>` output
   - LLM-based section validation
 
 - **`extracter`**: Figure and table extraction functionality
@@ -291,6 +307,26 @@ Note: This project is based on rsrpp by Aki.
 ## Releases
 
 <details open>
+<summary>1.0.24</summary>
+
+- Improved math extraction accuracy:
+  - Fixed critical bug where LLM-extracted math text was discarded; added trigram-based block alignment
+  - Reduced false positives: dates (`2019/2020`), statistics (`n = 50 participants`), section references
+  - Added detection for multi-char math functions (`sin`, `cos`, `log`), ASCII exponents/subscripts (`x^2`, `x_i`), letter fractions (`a/b`), norm notation (`||w||`)
+  - Unified math output to LaTeX format inside `<math>` tags (Unicode symbols converted to LaTeX commands)
+  - Added context-based validation for structure-only pattern matches
+  - Added 25 new tests including comprehensive regression suite
+
+</details>
+
+<details>
+<summary>1.0.23</summary>
+
+- Updated crate documentation and version.
+
+</details>
+
+<details>
 <summary>1.0.22</summary>
 
 - Added text cleaning and math markup support:

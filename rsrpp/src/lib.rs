@@ -6,7 +6,7 @@
 //!
 //! - Extract structured text from PDF papers (sections, paragraphs)
 //! - Detect and separate figure/table captions
-//! - Math expression detection and markup
+//! - Math expression detection and LaTeX-formatted markup (heuristic + LLM with trigram alignment)
 //! - **Structured reference extraction** (LLM-based, requires `OPENAI_API_KEY`)
 //!
 //! ## Quick Start
@@ -47,7 +47,7 @@
 //! // Basic conversion (captions separated, no math markup)
 //! let sections = Section::from_pages(&pages); // Vec<Section>
 //!
-//! // With math markup (math expressions wrapped in <math>...</math> tags)
+//! // With math markup (math expressions wrapped in <math>...</math> tags, LaTeX format)
 //! let sections_with_math = Section::from_pages_with_math(&pages, &config.math_texts);
 //!
 //! let json = serde_json::to_string(&sections_with_math).unwrap(); // String

@@ -56,6 +56,18 @@ License: MIT
 ## Releases
 
 <details open>
+<summary>1.0.24</summary>
+
+- Improved math extraction accuracy:
+  - Fixed critical bug where LLM-extracted math text was discarded; added trigram-based block alignment
+  - Reduced false positives: dates, statistics, section/figure references
+  - Added detection for multi-char math functions, ASCII exponents/subscripts, letter fractions, norm notation
+  - Unified math output to LaTeX format inside `<math>` tags
+  - Added context-based validation for structure-only pattern matches
+
+</details>
+
+<details>
 <summary>1.0.21</summary>
 
 - Fixed panic-causing unwrap() calls with proper error handling.
