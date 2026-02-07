@@ -37,6 +37,16 @@ Options:
 ## Releases
 
 <details open>
+<summary>1.0.25</summary>
+
+- LLM-enhanced processing is now enabled by default
+  - If `OPENAI_API_KEY` is not set, LLM is automatically disabled at runtime
+  - Use `--no-llm` to explicitly disable
+- Fixed LLM section validation discarding sections from pages the LLM hadn't examined
+
+</details>
+
+<details>
 <summary>1.0.24</summary>
 
 - Fixed body text loss in Nature-format and non-standard papers:

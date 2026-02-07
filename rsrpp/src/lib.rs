@@ -15,7 +15,7 @@
 //! ### Pre-requirements
 //! - Poppler: `sudo apt install poppler-utils`
 //! - OpenCV: `sudo apt install libopencv-dev clang libclang-dev`
-//! - (Optional) `OPENAI_API_KEY` environment variable for LLM features
+//! - `OPENAI_API_KEY` environment variable for LLM features (enabled by default; auto-disabled if not set)
 //!
 //! ### Installation
 //! To start using the `rsrpp` library, add it to your project's dependencies in the `Cargo.toml` file:
@@ -40,7 +40,7 @@
 //! # use rsrpp::models::Section;
 //! # use rsrpp::parser::parse;
 //! # async fn try_main() -> Result<(), String> {
-//! let mut config = ParserConfig::new();
+//! let mut config = ParserConfig::new(); // LLM enabled by default
 //! let verbose = true;
 //! let url = "https://arxiv.org/pdf/1706.03762";
 //! let pages = parse(url, &mut config, verbose).await.unwrap(); // Vec<Page>
@@ -66,7 +66,7 @@
 //! use rsrpp::config::ParserConfig;
 //! use rsrpp::parser::{parse, pages2paper_output};
 //!
-//! let mut config = ParserConfig::new();
+//! let mut config = ParserConfig::new(); // LLM enabled by default
 //! config.extract_references = true; // Enable reference extraction
 //!
 //! let pages = parse("paper.pdf", &mut config, false).await?;

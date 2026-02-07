@@ -56,6 +56,17 @@ License: MIT
 ## Releases
 
 <details open>
+<summary>1.0.25</summary>
+
+- LLM-enhanced processing is now enabled by default (`ParserConfig::new()` sets `use_llm: true`)
+  - If `OPENAI_API_KEY` is not set, LLM is automatically disabled at runtime
+  - Use `config.use_llm = false` to explicitly disable
+- Fixed LLM section validation discarding sections from pages the LLM hadn't examined
+  - `merge_sections()` now uses page-range-aware logic
+
+</details>
+
+<details>
 <summary>1.0.24</summary>
 
 - Fixed body text loss in Nature-format and non-standard papers:

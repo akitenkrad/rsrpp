@@ -59,7 +59,7 @@ use rsrpp::parser::{parse, structs::{ParserConfig, Section}};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = ParserConfig::new();
+    let mut config = ParserConfig::new(); // LLM enabled by default
     let verbose = true;
 
     // Specify URL or local file path
@@ -309,6 +309,18 @@ Note: This project is based on rsrpp by Aki.
 ## Releases
 
 <details open>
+<summary>1.0.25</summary>
+
+- LLM-enhanced processing is now enabled by default (`ParserConfig::new()` sets `use_llm: true`)
+  - If `OPENAI_API_KEY` is not set, LLM is automatically disabled at runtime
+  - Use `--no-llm` (CLI) or `config.use_llm = false` (library) to explicitly disable
+- Fixed LLM section validation discarding sections from pages the LLM hadn't examined
+  - `merge_sections()` now uses page-range-aware logic: only validates sections within the LLM-examined page range
+  - Sections outside the LLM page range are preserved from font-based detection
+
+</details>
+
+<details>
 <summary>1.0.24</summary>
 
 - Fixed body text loss in Nature-format and non-standard papers:
