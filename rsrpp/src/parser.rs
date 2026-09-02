@@ -221,6 +221,15 @@ fn filter_table_regions(
     for table in page.tables.iter() {
         let mut contained: Vec<(usize, usize, String)> = Vec::new();
         for (block_index, block) in page.blocks.iter().enumerate() {
+            // A caption that happens to sit inside the ruled area is still a caption.
+            // It is classified as one only later, in `cleaner::classify_blocks`, so
+            // without this check it is deleted before it can ever be recognised and
+            // ends up in neither `captions` nor `contents`. Skipping the whole block
+            // keeps continuation lines too — a caption rarely fits on one line, and
+            // half a caption is not much better than none.
+            if cleaner::is_caption(block) {
+                continue;
+            }
             for (line_index, line) in block.lines.iter().enumerate() {
                 let line_coord = Coordinate::from_object(line.x, line.y, line.width, line.height);
                 if !line_coord.is_contained_in(table) {
@@ -1057,6 +1066,57 @@ mod tests {
         assert_eq!(config.dropped_texts.len(), 40);
         assert!(config.dropped_texts.iter().all(|d| d.text == "0.719"));
         assert!(config.dropped_texts.iter().all(|d| d.reason == DropReason::TableRegion));
+    }
+
+    #[test]
+    fn test_filter_table_regions_keeps_captions_inside_the_region() {
+        // The caption of a table often sits inside the ruled area. It is only
+        // recognised as a caption later, so it has to survive this pass to be
+        // recognised at all. Poppler emits a caption as one block of several lines,
+        // which is why the exemption is applied per block rather than per line.
+        let mut page = page_with_lines(&[(300.0, "55%"), (320.0, "0.719"), (340.0, "Acc")]);
+
+        let mut caption = Block::new(100.0, 100.0, 200.0, 30.0);
+        for (y, text) in [
+            (
+                100.0,
+                "Table 2: Model performance on LongBench-SUM. All values are recall",
+            ),
+            (120.0, "rates. Bold marks the highest value in each column."),
+        ] {
+            let mut line = Line::new(100.0, y, 200.0, 10.0);
+            for word in text.split_whitespace() {
+                line.add_word(word.to_string(), 100.0, y, 10.0, 10.0);
+            }
+            caption.lines.push(line);
+        }
+        page.blocks.insert(0, caption);
+        page.tables.push(Coordinate::from_rect(90.0, 90.0, 310.0, 355.0));
+
+        let mut config = ParserConfig::new();
+        let (title_regex, ws_regex) = table_filter_regexes();
+        filter_table_regions(&mut page, &mut config, &title_regex, &ws_regex);
+
+        let kept: Vec<String> = page
+            .blocks
+            .iter()
+            .flat_map(|b| b.lines.iter())
+            .map(|l| l.get_text().trim().to_string())
+            .collect();
+        assert_eq!(
+            kept.len(),
+            2,
+            "both caption lines must survive, got {:?}",
+            kept
+        );
+        assert!(kept[0].starts_with("Table 2:"));
+        assert!(
+            kept[1].starts_with("rates."),
+            "the continuation line must survive too"
+        );
+        // The cells still go.
+        assert_eq!(config.dropped_texts.len(), 3);
+        assert!(config.dropped_texts.iter().all(|d| d.text.len() < 10));
     }
 
     #[test]
