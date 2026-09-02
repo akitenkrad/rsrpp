@@ -119,6 +119,14 @@ impl From<(String, String, String)> for SpecEntry {
     }
 }
 
+/// Hands out a distinct number to every path that must not be shared between
+/// concurrently running tests.
+///
+/// The clock is not enough on its own: tests running in parallel reach these places
+/// within the same millisecond, and two tests sharing one scratch directory means the
+/// first to call `cleanup()` deletes the papers the others are still reading.
+static NEXT_PATH_ID: AtomicUsize = AtomicUsize::new(0);
+
 #[derive(Debug, Clone)]
 pub struct TestPapers {
     pub papers: Vec<SamplePaper>,
@@ -148,9 +156,10 @@ impl TestPapers {
         }
         let mut tmp_dir = std::env::temp_dir();
         tmp_dir.push(format!(
-            "rsrpp_test_{}_{}",
+            "rsrpp_test_{}_{}_{}",
             std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+            NEXT_PATH_ID.fetch_add(1, Ordering::SeqCst)
         ));
         fs::create_dir_all(&tmp_dir)?;
         let mut cache_dir = std::env::temp_dir();
@@ -345,7 +354,15 @@ async fn download_with_cache(
             Ok(Ok(resp)) => {
                 if resp.status().is_success() {
                     let bytes = resp.bytes().await?;
-                    let tmp_file = cache_path.with_extension("tmp");
+                    // Stage under a name nobody else can be writing: two threads
+                    // fetching the same paper would otherwise interleave in one file.
+                    // The rename below is atomic, so whoever finishes last wins and
+                    // the cache entry is always a complete download.
+                    let tmp_file = cache_path.with_extension(format!(
+                        "{}.{}.tmp",
+                        std::process::id(),
+                        NEXT_PATH_ID.fetch_add(1, Ordering::SeqCst)
+                    ));
                     fs::write(&tmp_file, &bytes)?;
                     fs::rename(&tmp_file, &cache_path)?;
                     fs::copy(&cache_path, &dst_path)?;

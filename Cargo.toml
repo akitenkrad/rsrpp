@@ -11,28 +11,28 @@ repository = "https://github.com/akitenkrad/rsrpp.git"
 license = "MIT"
 
 [workspace.dependencies]
-anyhow = "1.0.100"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.148"
-tokio = { version = "1.49.0", features = ["full"] }
-chrono = "0.4.42"
-glob = "0.3.3"
-indicatif = "0.18.3"
-opencv = "0.98.1"
-quick-xml = "0.38.4"
-rand = "0.9.2"
-regex = "1.12.2"
-reqwest = "0.13.1"
+anyhow = "1.0.104"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["full"] }
+chrono = "0.4.45"
+glob = "0.3.4"
+indicatif = "0.18.6"
+opencv = { version = "0.100.1", default-features = false, features = ["imgcodecs", "imgproc"] }
+quick-xml = "0.42.0"
+rand = "0.10.2"
+regex = "1.13.1"
+reqwest = "0.13.4"
 sci-rs = "0.4.1"
-scraper = "0.25.0"
+scraper = "0.27.0"
 tracing = { version = "0.1.44", features = ["log"] }
-tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
-clap = { version = "4.5.54", features = ["derive"] }
-futures = "0.3.31"
-strum = { version = "0.27.2", features = ["derive"] }
-test-log = { version = "0.2.19", features = ["trace"] }
-openai-tools = "1.0.4"
-base64 = "0.22"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+clap = { version = "4.6.6", features = ["derive"] }
+futures = "0.3.34"
+strum = { version = "0.28.0", features = ["derive"] }
+test-log = { version = "0.2.21", features = ["trace"] }
+openai-tools = "3.0.0"
+base64 = "0.23"
 
 [workspace.metadata.release]
 tag-prefix = ""

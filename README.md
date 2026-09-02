@@ -36,6 +36,9 @@ brew install poppler opencv pkg-config
 sudo dnf install poppler-utils opencv-devel clang clang-devel
 ```
 
+**Supported OpenCV versions: 4.x (tested against 4.11 and 4.13).** OpenCV is linked
+dynamically, so see [OpenCV linking](#opencv-linking) before installing the CLI.
+
 ### Installation
 
 #### As a Library
@@ -44,11 +47,71 @@ sudo dnf install poppler-utils opencv-devel clang clang-devel
 cargo add rsrpp
 ```
 
+To build without OpenCV (no table-region detection — see
+[the `table-detection` feature](#the-table-detection-feature)):
+
+```bash
+cargo add rsrpp --no-default-features
+```
+
 #### As a CLI Tool
 
 ```bash
 cargo install rsrpp-cli
 ```
+
+### OpenCV linking
+
+RSRPP links OpenCV **dynamically**. On macOS the recorded dependency carries the
+OpenCV soname (`libopencv_core.413.dylib`), so a Homebrew OpenCV upgrade removes the
+library the installed binary asks for and the CLI dies before `main()`:
+
+```
+dyld: Library not loaded: /opt/homebrew/opt/opencv/lib/libopencv_gapi.411.dylib
+  Referenced from: ~/.cargo/bin/rsrpp
+```
+
+This is not a crash inside RSRPP — the dynamic loader fails first, so no RSRPP code
+(and no error message of ours) can run. There are three ways to deal with it:
+
+**1. Reinstall after an OpenCV upgrade** (simplest):
+
+```bash
+cargo install rsrpp-cli --force
+```
+
+**2. Link only the OpenCV modules RSRPP uses.** By default the `opencv` crate links
+everything `pkg-config --libs opencv4` reports — 56 libraries on Homebrew, including
+`gapi`, `dnn` and `cuda*`, none of which RSRPP calls. Restricting the link set to the
+three that are actually used cuts the number of libraries that an upgrade can break:
+
+```bash
+OPENCV_LINK_LIBS=opencv_core,opencv_imgproc,opencv_imgcodecs \
+OPENCV_LINK_PATHS=+ OPENCV_INCLUDE_PATHS=+ \
+  cargo install rsrpp-cli --force
+```
+
+(`+` means "append to the auto-detected paths", so this stays portable across
+Homebrew, apt and dnf.) You still need to reinstall on a major OpenCV bump, but the
+build is faster and the exposure is 3 libraries instead of 56.
+
+**3. Build without OpenCV entirely** — immune to OpenCV upgrades:
+
+```bash
+cargo install rsrpp-cli --no-default-features
+```
+
+### The `table-detection` feature
+
+`table-detection` (enabled by default) is the only thing that pulls in OpenCV. It
+runs a Hough-line transform over each page image to find table regions so their
+contents are kept out of the body text.
+
+With `--no-default-features` the binary has **no OpenCV linkage at all** — verify with
+`otool -L $(which rsrpp) | grep opencv` (macOS) or `ldd $(which rsrpp) | grep opencv`
+(Linux), which should print nothing. The trade-off: table regions are no longer
+detected, so text inside ruled tables is emitted as part of the surrounding body
+section instead of being excluded.
 
 ### Basic Usage
 
@@ -114,6 +177,8 @@ rsrpp --pdf ./paper.pdf --out output.json --no-llm
 | `--no-llm` | Disable LLM-enhanced processing |
 | `--include-captions` | Include captions in main content field |
 | `--no-math-markup` | Disable math detection and markup |
+| `--extract-references` | Extract structured references (requires `OPENAI_API_KEY`) |
+| `--keep-dropped` | Append an `Unassigned` section holding everything the filters discarded |
 
 ##### Environment Variables
 
@@ -121,6 +186,41 @@ rsrpp --pdf ./paper.pdf --out output.json --no-llm
 |----------|-------------|---------|
 | `OPENAI_API_KEY` | OpenAI API key (required for LLM features) | - |
 | `OPENAI_API_MODEL` | Model to use for LLM processing | `gpt-5.2` |
+
+### Text coverage
+
+Some text is removed on purpose: cells inside a detected table region, and blocks too
+narrow and short to be body text (figure axis labels, legends). To keep "removed on
+purpose" from turning into "lost without saying so", every parse reports what it kept:
+
+```
+WARN rsrpp::parser: Text coverage 93.2% (32018 of 34364 source chars kept, 32018 chars
+in blocks). Discarded — narrow block: 196 fragments / 1128 chars, outside text area: 2
+fragments / 62 chars, table region: 145 fragments / 1156 chars.
+```
+
+The line is logged at `WARN` below 99% coverage and at `INFO` above it, so a badly
+mis-parsed paper is visible without diffing the output. Coverage counts alphanumeric
+characters only, so whitespace and reading-order differences do not register as loss.
+
+Nothing is discarded silently. From the library, every removed fragment is in
+`ParserConfig::dropped_texts` with the page it came from and the reason it went:
+
+```rust
+let pages = parse(url, &mut config, false).await?;
+
+println!("coverage: {:?}", config.coverage());
+for dropped in &config.dropped_texts {
+    println!("p{} [{}] {}", dropped.page, dropped.reason, dropped.text);
+}
+```
+
+From the CLI, `--keep-dropped` appends an `Unassigned` section carrying the same
+fragments, which makes the output lossless with respect to what poppler read:
+
+```bash
+rsrpp --pdf paper.pdf --out output.json --keep-dropped --include-captions
+```
 
 ## 📝 Output Format
 
@@ -278,18 +378,40 @@ async fn parse_paper(url: &str) -> Result<()> {
 
 The project includes a comprehensive test suite:
 
+Unit tests and end-to-end tests are separate, because they cost three orders of
+magnitude apart: a parse with the LLM enabled takes ~176s, the same parse without it
+~2.9s, and the 79 unit tests together ~2s.
+
 ```bash
-# Run all tests
+# Unit tests only (~2s) — the one to run while working
 makers nextest
+
+# End-to-end: fetches PDFs, runs poppler and OpenCV, calls the OpenAI API
+makers nextest-e2e
+
+# Everything, including doc-tests — run before committing
+makers nextest-all
+
+# A single test
+makers nextest test_parse_extract_sections_1
+
+# Without cargo-make
+cargo nextest run --workspace
 ```
+
+The e2e tests download sample papers from arXiv and cache them (TTL via
+`RSRPP_TEST_CACHE_TTL_SECONDS`, default 24h), and a few call the OpenAI API, so
+`OPENAI_API_KEY` must be set for those to do anything. Tests whose assertions are
+structural parse with the LLM disabled; the LLM path has its own dedicated tests.
 
 ### Development Environment Setup
 
 ```bash
 git clone https://github.com/akitenkrad/rsrpp.git
 cd rsrpp
-makers build-all
-cargo nextest
+# Install the prerequisites above (poppler, OpenCV, pkg-config), then:
+makers build
+makers nextest
 ```
 
 ## 📄 License

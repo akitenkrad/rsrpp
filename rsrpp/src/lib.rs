@@ -14,8 +14,15 @@
 //!
 //! ### Pre-requirements
 //! - Poppler: `sudo apt install poppler-utils`
-//! - OpenCV: `sudo apt install libopencv-dev clang libclang-dev`
+//! - OpenCV 4.x: `sudo apt install libopencv-dev clang libclang-dev` (only needed for the
+//!   default `table-detection` feature; build with `--no-default-features` to drop it)
 //! - `OPENAI_API_KEY` environment variable for LLM features (enabled by default; auto-disabled if not set)
+//!
+//! ### Cargo features
+//!
+//! - `table-detection` *(default)* — OpenCV-backed detection of table regions, so table
+//!   contents are excluded from the body text. Disabling it removes the OpenCV dependency
+//!   entirely, at the cost of table text being merged into the surrounding section.
 //!
 //! ### Installation
 //! To start using the `rsrpp` library, add it to your project's dependencies in the `Cargo.toml` file:
@@ -35,7 +42,7 @@
 //!
 //! ### Basic Usage
 //!
-//! ```rust
+//! ```rust,no_run
 //! # use rsrpp::config::ParserConfig;
 //! # use rsrpp::models::Section;
 //! # use rsrpp::parser::parse;

@@ -5,7 +5,7 @@ use clap::Parser;
 use rsrpp::{
     config::ParserConfig,
     models::Section,
-    parser::{pages2paper_output, parse},
+    parser::{pages2paper_output, parse, unassigned_section},
 };
 use std::path::Path;
 
@@ -48,6 +48,13 @@ struct Args {
         help = "Extract structured references (requires OPENAI_API_KEY)"
     )]
     extract_references: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Append an 'Unassigned' section holding every fragment the parsing filters discarded (table cells, figure labels), making the output lossless"
+    )]
+    keep_dropped: bool,
 }
 
 #[tokio::main]
@@ -97,6 +104,10 @@ async fn main() {
             }
         }
 
+        if args.keep_dropped {
+            output.sections.extend(unassigned_section(&config));
+        }
+
         serde_json::to_string_pretty(&output).unwrap()
     } else {
         // Generate sections with or without math markup
@@ -113,6 +124,10 @@ async fn main() {
                     section.contents.extend(section.captions.drain(..));
                 }
             }
+        }
+
+        if args.keep_dropped {
+            sections.extend(unassigned_section(&config));
         }
 
         serde_json::to_string_pretty(&sections).unwrap()

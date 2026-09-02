@@ -1,9 +1,9 @@
 use anyhow::Result;
 use scraper::html;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::cleaner;
-use crate::config::{PageNumber, ParserConfig};
+use crate::config::{normalized_len, DropReason, PageNumber, ParserConfig};
 use crate::converter::pdf2html;
 use crate::extracter::{adjst_columns, extract_tables, get_text_area};
 use crate::llm;
@@ -35,6 +35,10 @@ where
 }
 
 pub(crate) fn parse_html2pages(config: &mut ParserConfig, html: html::Html) -> Result<Vec<Page>> {
+    // Everything poppler put in the bbox HTML, before any filter runs. This is the
+    // denominator for `ParserConfig::coverage`.
+    config.source_char_count = normalized_len(&html.root_element().text().collect::<String>());
+
     let mut pages = Vec::new();
     let section_title_regex = regex::Regex::new(r"^\d+\.?\s*").unwrap();
     let whitespace_regex = regex::Regex::new(r"\s+").unwrap();
@@ -75,7 +79,7 @@ pub(crate) fn parse_html2pages(config: &mut ParserConfig, html: html::Html) -> R
 
             let line_selector = scraper::Selector::parse("line").unwrap();
             let _lines = block.select(&line_selector);
-            'line_iter: for line in _lines {
+            for line in _lines {
                 let line_xmin: f32 = parse_attr(&line, "xmin", "line")?;
                 let line_ymin: f32 = parse_attr(&line, "ymin", "line")?;
                 let line_xmax: f32 = parse_attr(&line, "xmax", "line")?;
@@ -90,24 +94,6 @@ pub(crate) fn parse_html2pages(config: &mut ParserConfig, html: html::Html) -> R
                 // Exempt known section titles from table filtering.
                 // Section titles are detected via font analysis (high confidence),
                 // so they should not be discarded by geometric table overlap.
-                let line_text: String = line.text().collect::<String>();
-                let line_text_normalized =
-                    whitespace_regex.replace_all(line_text.trim(), " ").to_string();
-                let line_text_stripped =
-                    section_title_regex.replace(&line_text_normalized, "").trim().to_string();
-                let is_section_title = config.sections.iter().any(|(_, section)| {
-                    line_text_stripped.to_lowercase() == section.to_lowercase()
-                });
-
-                if !is_section_title {
-                    for table in _page.tables.iter() {
-                        let line_coord =
-                            Coordinate::from_object(_line.x, _line.y, _line.width, _line.height);
-                        if line_coord.is_contained_in(&table) {
-                            continue 'line_iter;
-                        }
-                    }
-                }
 
                 let word_selector = scraper::Selector::parse("word").unwrap();
                 let _words = line.select(&word_selector);
@@ -133,6 +119,8 @@ pub(crate) fn parse_html2pages(config: &mut ParserConfig, html: html::Html) -> R
                 _page.blocks.push(_block);
             }
         }
+        filter_table_regions(&mut _page, config, &section_title_regex, &whitespace_regex);
+
         if _page.blocks.len() > 0 {
             pages.push(_page);
         }
@@ -140,14 +128,183 @@ pub(crate) fn parse_html2pages(config: &mut ParserConfig, html: html::Html) -> R
     return Ok(pages);
 }
 
+/// Reduces a heading to the characters that carry its identity: no leading section
+/// number, no punctuation, no spaces, lower case.
+///
+/// Headings do not survive PDF extraction intact. A small-caps "Introduction" reaches
+/// us as "I NTRODUCTION" in the body text but as "INTRODUCTION" from the font pass, and
+/// "Related Work" as "R ELATED W ORK". Comparing the strings as they arrive matches
+/// neither; comparing only their letters and digits matches both.
+pub(crate) fn normalize_section_key(text: &str, leading_number: &regex::Regex) -> String {
+    leading_number
+        .replace(text.trim(), "")
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// Minimum number of prose-like lines before a detected region is treated as body text.
+const PROSE_LINE_MIN: usize = 3;
+/// A line counts as prose when it is at least this many characters long...
+const PROSE_LINE_CHARS: usize = 40;
+/// ...and has at least this many whitespace-separated words.
+const PROSE_LINE_WORDS: usize = 6;
+/// Share of a region's characters that must sit in prose-like lines for the whole
+/// region to be read as prose rather than as table cells.
+const PROSE_CHAR_SHARE: f32 = 0.6;
+
+/// Decides whether the text inside a detected region reads as prose.
+///
+/// Hough line detection cannot tell a three-rule booktabs table from a figure or a
+/// framed example that happens to have three horizontal strokes, and a false positive
+/// there deletes body text. Table cells are short and word-poor; body paragraphs are
+/// long and word-rich, so the contained text settles the ambiguity that the geometry
+/// leaves open.
+fn region_is_prose(texts: &[String]) -> bool {
+    let mut prose_lines = 0usize;
+    let mut prose_chars = 0usize;
+    let mut total_chars = 0usize;
+
+    for text in texts {
+        let chars = text.chars().count();
+        total_chars += chars;
+        if chars >= PROSE_LINE_CHARS && text.split_whitespace().count() >= PROSE_LINE_WORDS {
+            prose_lines += 1;
+            prose_chars += chars;
+        }
+    }
+
+    if total_chars == 0 {
+        return false;
+    }
+    prose_lines >= PROSE_LINE_MIN && prose_chars as f32 / total_chars as f32 >= PROSE_CHAR_SHARE
+}
+
+/// Removes lines that sit inside a detected table region, so table contents do not
+/// leak into the body text.
+///
+/// Runs after the page has been parsed, not while it is being parsed, so that the
+/// decision can take the region's text into account: a region whose contents read as
+/// prose is a mis-detection and is left alone. Section titles are exempt regardless —
+/// they are found by font analysis, which is far more reliable than geometry, and
+/// deleting one silently breaks every section boundary after it.
+///
+/// Every line actually removed is recorded in [`ParserConfig::dropped_texts`].
+fn filter_table_regions(
+    page: &mut Page,
+    config: &mut ParserConfig,
+    section_title_regex: &regex::Regex,
+    whitespace_regex: &regex::Regex,
+) {
+    if page.tables.is_empty() {
+        return;
+    }
+
+    let page_number = page.page_number;
+    let is_section_title = |text: &str| {
+        let key = normalize_section_key(text, section_title_regex);
+        !key.is_empty()
+            && config
+                .sections
+                .iter()
+                .any(|(_, section)| normalize_section_key(section, section_title_regex) == key)
+    };
+
+    // Judge every region before removing anything. Regions overlap — a line can sit in
+    // a region that reads as prose and in one that reads as a table — and the prose
+    // verdict has to win, otherwise the guard that protects body text from a
+    // mis-detected table is silently undone by whichever other region also covers it.
+    let mut kept_as_prose: HashSet<(usize, usize)> = HashSet::new();
+    let mut doomed: Vec<(usize, usize, String)> = Vec::new();
+
+    for table in page.tables.iter() {
+        let mut contained: Vec<(usize, usize, String)> = Vec::new();
+        for (block_index, block) in page.blocks.iter().enumerate() {
+            for (line_index, line) in block.lines.iter().enumerate() {
+                let line_coord = Coordinate::from_object(line.x, line.y, line.width, line.height);
+                if !line_coord.is_contained_in(table) {
+                    continue;
+                }
+                let text = whitespace_regex.replace_all(line.get_text().trim(), " ").to_string();
+                if is_section_title(&text) {
+                    continue;
+                }
+                contained.push((block_index, line_index, text));
+            }
+        }
+
+        let texts: Vec<String> = contained.iter().map(|(_, _, t)| t.clone()).collect();
+        if region_is_prose(&texts) {
+            tracing::debug!(
+                "Page {}: keeping region with {} lines — contents read as prose, not a table",
+                page_number,
+                contained.len()
+            );
+            kept_as_prose.extend(contained.iter().map(|(block, line, _)| (*block, *line)));
+            continue;
+        }
+
+        // A region holding prose-like lines that the line-count rule still calls a table
+        // is where that rule decides the outcome on its own. Surfacing it makes the
+        // threshold auditable against real papers instead of only in the abstract.
+        let prose_like = texts
+            .iter()
+            .filter(|t| {
+                t.chars().count() >= PROSE_LINE_CHARS
+                    && t.split_whitespace().count() >= PROSE_LINE_WORDS
+            })
+            .count();
+        if prose_like > 0 && prose_like < PROSE_LINE_MIN {
+            tracing::debug!(
+                "Page {}: region of {} lines dropped as a table, though {} line(s) read as prose: {:?}",
+                page_number,
+                texts.len(),
+                prose_like,
+                texts
+                    .iter()
+                    .filter(|t| {
+                        t.chars().count() >= PROSE_LINE_CHARS
+                            && t.split_whitespace().count() >= PROSE_LINE_WORDS
+                    })
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        doomed.extend(contained);
+    }
+
+    // A line held by any prose region stays, whatever the other regions concluded.
+    doomed.retain(|(block_index, line_index, _)| {
+        !kept_as_prose.contains(&(*block_index, *line_index))
+    });
+
+    if doomed.is_empty() {
+        return;
+    }
+
+    // A line can fall inside more than one region; remove each at most once.
+    doomed.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+    doomed.dedup_by(|a, b| (a.0, a.1) == (b.0, b.1));
+
+    for (block_index, line_index, text) in doomed.iter().rev() {
+        page.blocks[*block_index].lines.remove(*line_index);
+        config.record_drop(page_number, DropReason::TableRegion, text);
+    }
+    page.blocks.retain(|block| !block.lines.is_empty());
+}
+
 pub(crate) fn parse_extract_textarea(
     config: &mut ParserConfig,
     pages: &mut Vec<Page>,
 ) -> Result<()> {
-    let section_titles =
-        config.sections.iter().map(|(_, section)| section.to_lowercase()).collect::<Vec<String>>();
+    let title_index_regex = regex::Regex::new(r"^\d+\.?\s*").unwrap();
+    let section_titles = config
+        .sections
+        .iter()
+        .map(|(_, section)| normalize_section_key(section, &title_index_regex))
+        .collect::<Vec<String>>();
     let text_area = get_text_area(&pages);
-    let title_index_regex = regex::Regex::new(r"\d+\.").unwrap();
 
     // If no sections detected, use full text extraction mode (skip section-based filtering)
     let full_text_mode = config.sections.is_empty();
@@ -155,8 +312,10 @@ pub(crate) fn parse_extract_textarea(
         tracing::info!("Using full text extraction mode (no sections detected)");
     }
 
+    let mut dropped: Vec<(PageNumber, DropReason, String)> = Vec::new();
     for page in pages.iter_mut() {
-        let mut remove_indices: Vec<usize> = Vec::new();
+        let page_number = page.page_number;
+        let mut remove_indices: Vec<(usize, DropReason)> = Vec::new();
         let width = if page.number_of_columns == 2 {
             page.width / 2.2
         } else {
@@ -165,22 +324,25 @@ pub(crate) fn parse_extract_textarea(
         for (i, block) in page.blocks.iter_mut().enumerate() {
             let block_coord = Coordinate::from_object(block.x, block.y, block.width, block.height);
             let iou = text_area.iou(&block_coord);
-            let block_text = block.get_text();
-            let block_text = title_index_regex.replace(&block_text, "").trim().to_string();
+            let block_text = normalize_section_key(&block.get_text(), &title_index_regex);
 
             if (iou - 0.0).abs() < 1e-6 {
-                remove_indices.push(i);
+                remove_indices.push((i, DropReason::OutsideTextArea));
             } else if !full_text_mode
-                && !section_titles.contains(&block_text.to_lowercase())
+                && !section_titles.contains(&block_text)
                 && (block.width / width < 0.3 && block.lines.len() < 4)
             {
                 // Only apply section-based filtering if not in full text mode
-                remove_indices.push(i);
+                remove_indices.push((i, DropReason::NarrowBlock));
             }
         }
-        for i in remove_indices.iter().rev() {
-            page.blocks.remove(*i);
+        for (i, reason) in remove_indices.iter().rev() {
+            let removed = page.blocks.remove(*i);
+            dropped.push((page_number, *reason, removed.get_text()));
         }
+    }
+    for (page_number, reason, text) in dropped {
+        config.record_drop(page_number, reason, &text);
     }
     return Ok(());
 }
@@ -207,23 +369,26 @@ pub(crate) fn parse_extract_section_text(
         tracing::info!("Initial section: {}", current_section);
     }
 
-    let title_regex = regex::Regex::new(r"\d+\.").unwrap();
+    let leading_number = regex::Regex::new(r"^\d+\.?\s*").unwrap();
     for page in pages.iter_mut() {
         let page_number = page.page_number;
         for block in page.blocks.iter_mut() {
             for line in block.lines.iter_mut() {
-                let text = line.get_text();
-                let text = title_regex.replace(&text, "").trim().to_string();
-                if config.sections.iter().any(|(pg, section)| {
-                    if *pg < 0 {
-                        // LLM-added section: match by text only
-                        text.to_lowercase() == section.to_lowercase()
-                    } else {
-                        // Font-based section: match by text + page number
-                        text.to_lowercase() == section.to_lowercase() && pg == &page_number
-                    }
-                }) {
-                    current_section = text;
+                let key = normalize_section_key(&line.get_text(), &leading_number);
+                if key.is_empty() {
+                    block.section = current_section.clone();
+                    continue;
+                }
+                let matched = config.sections.iter().find(|(pg, section)| {
+                    // LLM-added sections carry no page, so they match on text alone;
+                    // font-based ones must also be on the page they were found.
+                    (*pg < 0 || *pg == page_number)
+                        && normalize_section_key(section, &leading_number) == key
+                });
+                if let Some((_, section)) = matched {
+                    // Use the detected heading, not the line as it appears in the body
+                    // text — a small-caps heading reads "I NTRODUCTION" there.
+                    current_section = section.clone();
                 }
                 block.section = current_section.clone();
             }
@@ -361,6 +526,12 @@ pub async fn parse(
     if verbose {
         tracing::info!("Parsing PDF: {}", path_or_url);
     }
+
+    // A caller may reuse one config across documents. Sections and dropped texts are
+    // appended to, not replaced, so without this the second document's coverage counts
+    // the first document's drops and its `Unassigned` section carries the first
+    // document's fragments.
+    config.reset_document_state();
 
     // LLM availability check
     if config.use_llm {
@@ -586,11 +757,68 @@ pub async fn parse(
         }
     }
 
+    report_coverage(config, &pages);
+
     if verbose {
         tracing::info!("Finished Parsing in {:.2}s", time.elapsed().as_secs());
     }
 
     return Ok(pages);
+}
+
+/// Coverage below this fraction is reported as a warning rather than as info.
+///
+/// A parse that keeps less than this much of the source text has almost certainly
+/// mis-detected the layout, and the caller should not treat the sections as complete.
+pub const COVERAGE_WARN_THRESHOLD: f32 = 0.99;
+
+/// Logs how much of the source text survived parsing, and what was discarded.
+///
+/// Text is never dropped silently: everything a filter removed is in
+/// [`ParserConfig::dropped_texts`], and the totals are summarised here so a caller
+/// watching the logs can see a bad parse without diffing the output themselves.
+fn report_coverage(config: &ParserConfig, pages: &[Page]) {
+    let Some(coverage) = config.coverage() else {
+        return;
+    };
+
+    let kept: usize = pages.iter().map(|p| normalized_len(&p.get_text())).sum();
+    let mut by_reason: HashMap<DropReason, (usize, usize)> = HashMap::new();
+    for drop in &config.dropped_texts {
+        let entry = by_reason.entry(drop.reason).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += normalized_len(&drop.text);
+    }
+    let mut breakdown: Vec<String> = by_reason
+        .iter()
+        .map(|(reason, (count, chars))| format!("{reason}: {count} fragments / {chars} chars"))
+        .collect();
+    breakdown.sort();
+    let breakdown = if breakdown.is_empty() {
+        "nothing discarded".to_string()
+    } else {
+        breakdown.join(", ")
+    };
+
+    if coverage < COVERAGE_WARN_THRESHOLD {
+        tracing::warn!(
+            "Text coverage {:.1}% ({} of {} source chars kept, {} chars in blocks). \
+             Discarded — {}. Inspect ParserConfig::dropped_texts for the full text.",
+            coverage * 100.0,
+            config.source_char_count.saturating_sub(config.dropped_char_count()),
+            config.source_char_count,
+            kept,
+            breakdown
+        );
+    } else {
+        tracing::info!(
+            "Text coverage {:.1}% ({} source chars, {} chars in blocks). Discarded — {}.",
+            coverage * 100.0,
+            config.source_char_count,
+            kept,
+            breakdown
+        );
+    }
 }
 
 /// Converts pages to JSON using the old format (title + contents only).
@@ -637,9 +865,233 @@ pub fn pages2sections(pages: &Vec<Page>, config: &crate::config::ParserConfig) -
     Section::from_pages_with_math(pages, &config.math_texts)
 }
 
+/// Title of the section produced by [`unassigned_section`].
+pub const UNASSIGNED_SECTION_TITLE: &str = "Unassigned";
+
+/// Collects everything the parsing filters discarded into a single trailing section.
+///
+/// Table cells and figure labels are excluded from the body on purpose, but "excluded"
+/// should not mean "unrecoverable": appending this section makes the output lossless
+/// with respect to what poppler read, at the cost of a section whose contents are not
+/// prose. Returns `None` when nothing was discarded.
+///
+/// The section sorts last (`index` is [`i16::MAX`]) so it never displaces a real one.
+pub fn unassigned_section(config: &crate::config::ParserConfig) -> Option<Section> {
+    if config.dropped_texts.is_empty() {
+        return None;
+    }
+    Some(Section {
+        index: i16::MAX,
+        title: UNASSIGNED_SECTION_TITLE.to_string(),
+        contents: config.dropped_texts.iter().map(|d| d.text.clone()).collect(),
+        math_contents: None,
+        captions: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DropReason;
+
+    #[test]
+    fn test_normalize_section_key_matches_split_small_caps() {
+        let leading = regex::Regex::new(r"^\d+\.?\s*").unwrap();
+        // Body text and the font pass disagree on where the spaces go; the key must not.
+        assert_eq!(
+            normalize_section_key("I NTRODUCTION", &leading),
+            normalize_section_key("Introduction", &leading)
+        );
+        assert_eq!(
+            normalize_section_key("R ELATED W ORK", &leading),
+            normalize_section_key("RELATED WORK", &leading)
+        );
+    }
+
+    #[test]
+    fn test_normalize_section_key_drops_the_section_number() {
+        let leading = regex::Regex::new(r"^\d+\.?\s*").unwrap();
+        assert_eq!(
+            normalize_section_key("1 I NTRODUCTION", &leading),
+            "introduction"
+        );
+        assert_eq!(
+            normalize_section_key("2. Related Work", &leading),
+            "relatedwork"
+        );
+        // Only a *leading* number goes; digits inside the heading stay.
+        assert_eq!(
+            normalize_section_key("GPT-4 Results", &leading),
+            "gpt4results"
+        );
+    }
+
+    #[test]
+    fn test_normalize_section_key_keeps_distinct_headings_distinct() {
+        let leading = regex::Regex::new(r"^\d+\.?\s*").unwrap();
+        assert_ne!(
+            normalize_section_key("Results", &leading),
+            normalize_section_key("Discussion", &leading)
+        );
+        assert_eq!(normalize_section_key("   ", &leading), "");
+    }
+
+    #[test]
+    fn test_region_is_prose_rejects_table_cells() {
+        // Numeric result table: short, word-poor cells.
+        let cells = vec![
+            "Model".to_string(),
+            "Acc".to_string(),
+            "F1".to_string(),
+            "Mistral 7b v0.1".to_string(),
+            "15.1%".to_string(),
+            "52.0/51.2".to_string(),
+            "Mixtral 8x7b".to_string(),
+            "9.0%".to_string(),
+            "66.3/65.9".to_string(),
+        ];
+        assert!(!region_is_prose(&cells));
+    }
+
+    #[test]
+    fn test_region_is_prose_accepts_body_paragraph() {
+        // A paragraph that a false-positive table region would otherwise swallow.
+        let paragraph = vec![
+            "trained classifier to other methods via classification".to_string(),
+            "accuracy, macro-F1 and weighted-F1 score averaged on the".to_string(),
+            "five test datasets, shown in Table 2. Our parameter-".to_string(),
+            "efficient-fine-tuned classifier achieved 99% accuracy.".to_string(),
+        ];
+        assert!(region_is_prose(&paragraph));
+    }
+
+    #[test]
+    fn test_region_is_prose_needs_several_prose_lines() {
+        // A single long caption line among short labels is not a paragraph.
+        let mixed = vec![
+            "Figure 3: the mismatch rate rises with instruction strength.".to_string(),
+            "(a)".to_string(),
+            "(b)".to_string(),
+            "0.1".to_string(),
+        ];
+        assert!(!region_is_prose(&mixed));
+    }
+
+    #[test]
+    fn test_region_is_prose_on_empty_region() {
+        assert!(!region_is_prose(&[]));
+    }
+
+    /// Builds a page whose blocks each hold one line, laid out on a single column.
+    ///
+    /// `lines` is `(y, text)`; every line is 200 wide and 10 tall starting at x=100, so
+    /// a `Coordinate::from_rect` spanning that x range contains whichever rows it covers.
+    fn page_with_lines(lines: &[(f32, &str)]) -> Page {
+        let mut page = Page::new(595.0, 842.0, 1);
+        for (y, text) in lines {
+            let mut block = Block::new(100.0, *y, 200.0, 10.0);
+            let mut line = Line::new(100.0, *y, 200.0, 10.0);
+            for word in text.split_whitespace() {
+                line.add_word(word.to_string(), 100.0, *y, 10.0, 10.0);
+            }
+            block.lines.push(line);
+            page.blocks.push(block);
+        }
+        page
+    }
+
+    fn table_filter_regexes() -> (regex::Regex, regex::Regex) {
+        (
+            regex::Regex::new(r"^\d+\.?\s*").unwrap(),
+            regex::Regex::new(r"\s+").unwrap(),
+        )
+    }
+
+    #[test]
+    fn test_filter_table_regions_keeps_prose_over_overlapping_table_region() {
+        // Region A covers only the three prose lines, so it is rejected as a
+        // mis-detection. Region B covers the prose *and* a large numeric table, which
+        // makes B read as tabular. B must not undo A's verdict on the shared lines.
+        let mut lines: Vec<(f32, String)> = vec![
+            (
+                100.0,
+                "trained classifier to other methods via classification accuracy".to_string(),
+            ),
+            (
+                120.0,
+                "and macro-F1 score averaged on the five test datasets shown here".to_string(),
+            ),
+            (
+                140.0,
+                "our parameter efficient fine tuned classifier achieved high accuracy".to_string(),
+            ),
+        ];
+        // Enough cells that the prose no longer dominates B's character count.
+        for i in 0..40 {
+            lines.push((300.0 + i as f32 * 10.0, "0.719".to_string()));
+        }
+        let borrowed: Vec<(f32, &str)> = lines.iter().map(|(y, t)| (*y, t.as_str())).collect();
+        let mut page = page_with_lines(&borrowed);
+
+        page.tables.push(Coordinate::from_rect(90.0, 90.0, 310.0, 155.0)); // prose only
+        page.tables.push(Coordinate::from_rect(90.0, 90.0, 310.0, 710.0)); // prose + table
+
+        let mut config = ParserConfig::new();
+        let (title_regex, ws_regex) = table_filter_regexes();
+        filter_table_regions(&mut page, &mut config, &title_regex, &ws_regex);
+
+        let kept: Vec<String> = page
+            .blocks
+            .iter()
+            .flat_map(|b| b.lines.iter())
+            .map(|l| l.get_text().trim().to_string())
+            .collect();
+        assert_eq!(
+            kept.len(),
+            3,
+            "the three prose lines must survive, got {:?}",
+            kept
+        );
+        assert!(kept.iter().all(|t| t.contains("classifier") || t.contains("macro-F1")));
+        // Every cell, and only the cells, was recorded as dropped.
+        assert_eq!(config.dropped_texts.len(), 40);
+        assert!(config.dropped_texts.iter().all(|d| d.text == "0.719"));
+        assert!(config.dropped_texts.iter().all(|d| d.reason == DropReason::TableRegion));
+    }
+
+    #[test]
+    fn test_filter_table_regions_still_drops_table_cells() {
+        // Guard the other direction: a region that really is tabular is still removed.
+        let mut page = page_with_lines(&[(100.0, "55%"), (120.0, "0.719"), (140.0, "Acc")]);
+        page.tables.push(Coordinate::from_rect(90.0, 90.0, 310.0, 155.0));
+
+        let mut config = ParserConfig::new();
+        let (title_regex, ws_regex) = table_filter_regexes();
+        filter_table_regions(&mut page, &mut config, &title_regex, &ws_regex);
+
+        assert!(page.blocks.is_empty(), "emptied blocks should be removed");
+        assert_eq!(config.dropped_texts.len(), 3);
+    }
+
+    #[test]
+    fn test_unassigned_section_is_none_when_nothing_dropped() {
+        let config = ParserConfig::new();
+        assert!(unassigned_section(&config).is_none());
+    }
+
+    #[test]
+    fn test_unassigned_section_collects_every_drop() {
+        let mut config = ParserConfig::new();
+        config.record_drop(1, DropReason::TableRegion, "55%");
+        config.record_drop(2, DropReason::NarrowBlock, "Acc");
+
+        let section = unassigned_section(&config).expect("drops recorded");
+        assert_eq!(section.title, UNASSIGNED_SECTION_TITLE);
+        assert_eq!(section.contents, vec!["55%".to_string(), "Acc".to_string()]);
+        // Sorts after every real section.
+        assert_eq!(section.index, i16::MAX);
+    }
+
     use crate::config::ParserConfig;
     use crate::models::{Coordinate, Section};
     use crate::parser::pages2json;
@@ -651,6 +1103,9 @@ mod tests {
         let tp = TestPapers::setup().await.expect("setup test papers");
         let paper = tp.get_by_title(BuiltinPaper::AttentionIsAllYouNeed).unwrap();
         let mut config = ParserConfig::new();
+        // Structural assertions only: the LLM would not change them, and a live
+        // call costs ~60x the parse itself. LLM behaviour has its own tests.
+        config.use_llm = false;
         let mut pages = parse(
             paper.dest_path(&tp.tmp_dir).to_str().unwrap(),
             &mut config,
@@ -677,6 +1132,9 @@ mod tests {
         let tp = TestPapers::setup().await.expect("setup test papers");
         let paper = tp.get_by_title(BuiltinPaper::MemAgent).unwrap();
         let mut config = ParserConfig::new();
+        // Structural assertions only: the LLM would not change them, and a live
+        // call costs ~60x the parse itself. LLM behaviour has its own tests.
+        config.use_llm = false;
         let mut pages = parse(
             paper.dest_path(&tp.tmp_dir).to_str().unwrap(),
             &mut config,
@@ -703,6 +1161,9 @@ mod tests {
         let tp = TestPapers::setup().await.expect("setup test papers");
         let paper = tp.get_by_title(BuiltinPaper::UnsupervisedDialoguePolicies).unwrap();
         let mut config = ParserConfig::new();
+        // Structural assertions only: the LLM would not change them, and a live
+        // call costs ~60x the parse itself. LLM behaviour has its own tests.
+        config.use_llm = false;
         let mut pages = parse(
             paper.dest_path(&tp.tmp_dir).to_str().unwrap(),
             &mut config,
@@ -727,6 +1188,9 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_parse_1() {
         let mut config = ParserConfig::new();
+        // Structural assertions only: the LLM would not change them, and a live
+        // call costs ~60x the parse itself. LLM behaviour has its own tests.
+        config.use_llm = false;
         let url = "https://arxiv.org/pdf/2308.10379";
         let res = parse(url, &mut config, true).await;
         let pages = res.unwrap();
@@ -761,6 +1225,9 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_parse_2() {
         let mut config = ParserConfig::new();
+        // Structural assertions only: the LLM would not change them, and a live
+        // call costs ~60x the parse itself. LLM behaviour has its own tests.
+        config.use_llm = false;
         let url = "https://arxiv.org/pdf/1706.03762";
         let res = parse(url, &mut config, true).await;
         let pages = res.unwrap();
@@ -799,6 +1266,9 @@ mod tests {
         let paper = &tp.papers[0];
         let path = paper.dest_path(&tp.tmp_dir);
         let mut config = ParserConfig::new();
+        // Structural assertions only: the LLM would not change them, and a live
+        // call costs ~60x the parse itself. LLM behaviour has its own tests.
+        config.use_llm = false;
         let pages =
             parse(path.to_str().unwrap(), &mut config, true).await.expect("parse local sample");
         assert!(pages.len() > 0, "No pages found");
@@ -818,6 +1288,9 @@ mod tests {
             tracing::info!("Testing paper: {}", built_in_paper);
             let paper = tp.get_by_title(*built_in_paper).expect("paper not found");
             let mut config = ParserConfig::new();
+            // Structural assertions only: the LLM would not change them, and a live
+            // call costs ~60x the parse itself. LLM behaviour has its own tests.
+            config.use_llm = false;
             let filepath = paper.dest_path(&tp.tmp_dir);
             assert!(filepath.exists(), "file not found: {}", filepath.display());
             let pages = match parse(filepath.to_str().unwrap(), &mut config, true).await {
@@ -859,12 +1332,14 @@ mod tests {
         assert!(filepath.exists(), "file not found: {}", filepath.display());
 
         let mut config = ParserConfig::new();
+        // Structural assertions only: the LLM would not change them, and a live
+        // call costs ~60x the parse itself. LLM behaviour has its own tests.
+        config.use_llm = false;
         let result = parse(filepath.to_str().unwrap(), &mut config, true).await;
 
         // Paper has no "Abstract" heading but has standard section titles.
         // The fallback section detection should find sections via anchor-word matching.
-        let pages =
-            result.expect("Zep paper should parse successfully");
+        let pages = result.expect("Zep paper should parse successfully");
 
         tracing::info!("Zep paper parsed successfully with {} pages", pages.len());
         assert!(pages.len() > 0, "Should have at least one page");
@@ -880,7 +1355,8 @@ mod tests {
         // Should detect standard sections like Introduction, Conclusion, References
         assert!(
             section_names.iter().any(|s| s.to_lowercase() == "introduction"),
-            "Should detect Introduction section, got: {:?}", section_names
+            "Should detect Introduction section, got: {:?}",
+            section_names
         );
 
         // Verify that blocks are assigned to sections
@@ -924,6 +1400,9 @@ mod tests {
         assert!(filepath.exists(), "file not found: {}", filepath.display());
 
         let mut config = ParserConfig::new();
+        // Structural assertions only: the LLM would not change them, and a live
+        // call costs ~60x the parse itself. LLM behaviour has its own tests.
+        config.use_llm = false;
         let result = parse(filepath.to_str().unwrap(), &mut config, true).await;
 
         let pages = result.expect("Long document should parse successfully");
@@ -963,25 +1442,30 @@ mod tests {
     /// The parse pipeline should still work and produce results.
     #[test_log::test(tokio::test)]
     async fn test_parse_llm_disabled_fallback() {
+        // This test is about what happens when the LLM is asked for but unavailable.
+        // With a key present there is nothing here to assert, and running it anyway
+        // costs a full LLM parse, so leave that case to the tests that do assert on
+        // LLM output.
+        if llm::is_llm_available() {
+            tracing::info!("Skipping fallback test - OPENAI_API_KEY is set");
+            return;
+        }
+
         let tp = TestPapers::setup().await.expect("setup test papers");
         let paper = tp.get_by_title(BuiltinPaper::AttentionIsAllYouNeed).unwrap();
         let filepath = paper.dest_path(&tp.tmp_dir);
 
         let mut config = ParserConfig::new();
-        config.use_llm = true; // Request LLM, but API key is likely not set in CI
+        config.use_llm = true; // Requested, but no key — parse must degrade, not fail.
 
         let result = parse(filepath.to_str().unwrap(), &mut config, true).await;
         let pages = result.expect("Parse should succeed even without LLM");
 
         assert!(pages.len() > 0, "Should have pages");
-
-        // If no API key, use_llm should be set to false
-        if !llm::is_llm_available() {
-            assert!(
-                !config.use_llm,
-                "use_llm should be false when API key is not set"
-            );
-        }
+        assert!(
+            !config.use_llm,
+            "use_llm should be false when API key is not set"
+        );
 
         let sections = Section::from_pages(&pages);
         assert!(sections.len() >= 1, "Should produce at least 1 section");
@@ -1059,10 +1543,16 @@ mod tests {
 
         // Sections outside LLM range should be preserved with original page numbers
         let conclusion = merged.iter().find(|(_, s)| s == "Conclusion").unwrap();
-        assert_eq!(conclusion.0, 5, "Section outside LLM range should keep page number");
+        assert_eq!(
+            conclusion.0, 5,
+            "Section outside LLM range should keep page number"
+        );
 
         let references = merged.iter().find(|(_, s)| s == "References").unwrap();
-        assert_eq!(references.0, 6, "Section outside LLM range should keep page number");
+        assert_eq!(
+            references.0, 6,
+            "Section outside LLM range should keep page number"
+        );
     }
 
     /// Test that merge_sections preserves sections outside LLM page range.
@@ -1093,12 +1583,30 @@ mod tests {
         let section_names: Vec<&str> = merged.iter().map(|(_, s)| s.as_str()).collect();
         assert!(section_names.contains(&"Abstract"));
         assert!(section_names.contains(&"Introduction"));
-        assert!(!section_names.contains(&"Method"), "Method should be excluded — LLM has 'Methods' not 'Method'");
-        assert!(section_names.contains(&"Methods"), "LLM-only 'Methods' should be added");
-        assert!(section_names.contains(&"Results"), "Outside LLM range — should be preserved");
-        assert!(section_names.contains(&"Discussion"), "Outside LLM range — should be preserved");
-        assert!(section_names.contains(&"Conclusion"), "Outside LLM range — should be preserved");
-        assert!(section_names.contains(&"References"), "Outside LLM range — should be preserved");
+        assert!(
+            !section_names.contains(&"Method"),
+            "Method should be excluded — LLM has 'Methods' not 'Method'"
+        );
+        assert!(
+            section_names.contains(&"Methods"),
+            "LLM-only 'Methods' should be added"
+        );
+        assert!(
+            section_names.contains(&"Results"),
+            "Outside LLM range — should be preserved"
+        );
+        assert!(
+            section_names.contains(&"Discussion"),
+            "Outside LLM range — should be preserved"
+        );
+        assert!(
+            section_names.contains(&"Conclusion"),
+            "Outside LLM range — should be preserved"
+        );
+        assert!(
+            section_names.contains(&"References"),
+            "Outside LLM range — should be preserved"
+        );
 
         // Results should keep page number 5
         let results = merged.iter().find(|(_, s)| s == "Results").unwrap();
@@ -1132,7 +1640,10 @@ mod tests {
         assert!(section_names.contains(&"abstract".to_string()));
         assert!(section_names.contains(&"introduction".to_string()));
         assert!(section_names.contains(&"method".to_string()));
-        assert!(!section_names.contains(&"some noise".to_string()), "False positive should be filtered out");
+        assert!(
+            !section_names.contains(&"some noise".to_string()),
+            "False positive should be filtered out"
+        );
         assert_eq!(merged.len(), 3);
     }
 
@@ -1180,6 +1691,9 @@ mod tests {
         let filepath = paper.dest_path(&tp.tmp_dir);
 
         let mut config = ParserConfig::new();
+        // Structural assertions only: the LLM would not change them, and a live
+        // call costs ~60x the parse itself. LLM behaviour has its own tests.
+        config.use_llm = false;
         let pages = parse(filepath.to_str().unwrap(), &mut config, false)
             .await
             .expect("Parse should succeed");
@@ -1221,6 +1735,9 @@ mod tests {
         let filepath = paper.dest_path(&tp.tmp_dir);
 
         let mut config = ParserConfig::new();
+        // Structural assertions only: the LLM would not change them, and a live
+        // call costs ~60x the parse itself. LLM behaviour has its own tests.
+        config.use_llm = false;
         let pages = parse(filepath.to_str().unwrap(), &mut config, false)
             .await
             .expect("Parse should succeed");

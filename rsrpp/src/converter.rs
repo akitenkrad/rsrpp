@@ -213,25 +213,21 @@ pub(crate) fn save_pdf_as_xml(
     loop {
         match reader.read_event() {
             Ok(Event::Empty(e)) => {
-                if e.name().as_ref() == b"fontspec" {
+                if e.name().as_ref() == "fontspec" {
                     let mut id = 0i32;
                     let mut size = 0.0f32;
                     let mut family = String::new();
                     for attr in e.attributes() {
                         let attr = attr?;
                         match attr.key.as_ref() {
-                            b"id" => {
-                                id = String::from_utf8_lossy(attr.value.as_ref())
-                                    .parse::<i32>()
-                                    .unwrap_or(0);
+                            "id" => {
+                                id = attr.value.as_ref().parse::<i32>().unwrap_or(0);
                             }
-                            b"size" => {
-                                size = String::from_utf8_lossy(attr.value.as_ref())
-                                    .parse::<f32>()
-                                    .unwrap_or(0.0);
+                            "size" => {
+                                size = attr.value.as_ref().parse::<f32>().unwrap_or(0.0);
                             }
-                            b"family" => {
-                                family = String::from_utf8_lossy(attr.value.as_ref()).to_string();
+                            "family" => {
+                                family = attr.value.as_ref().to_string();
                             }
                             _ => {}
                         }
@@ -247,23 +243,21 @@ pub(crate) fn save_pdf_as_xml(
                 }
             }
             Ok(Event::Start(e)) => {
-                if e.name().as_ref() == b"text" {
+                if e.name().as_ref() == "text" {
                     current_font_id = e
                         .attributes()
                         .filter_map(|a| a.ok())
-                        .find(|a| a.key.as_ref() == b"font")
-                        .map(|a| {
-                            String::from_utf8_lossy(a.value.as_ref()).parse::<i32>().unwrap_or(0)
-                        })
+                        .find(|a| a.key.as_ref() == "font")
+                        .map(|a| a.value.as_ref().parse::<i32>().unwrap_or(0))
                         .unwrap_or(0);
                     current_text.clear();
                 }
             }
             Ok(Event::Text(e)) => {
-                current_text.push_str(&String::from_utf8_lossy(e.as_ref()));
+                current_text.push_str(e.as_ref());
             }
             Ok(Event::End(e)) => {
-                if e.name().as_ref() == b"text" {
+                if e.name().as_ref() == "text" {
                     let trimmed = current_text.trim();
                     let char_count = trimmed.chars().count();
                     if char_count > 0 {
@@ -426,6 +420,10 @@ pub(crate) fn save_pdf_as_xml(
     let mut start_paper_at: Option<usize> = None; // index in pending_sections when "abstract" was seen
     let mut probably_title = false;
     let mut pending_sections: Vec<(PageNumber, String)> = Vec::new();
+    let mut heading: Option<OpenHeading> = None;
+    let mut run_top: Option<f32> = None;
+    let mut run_left: Option<f32> = None;
+    let mut run_width: Option<f32> = None;
     let regex_is_number = regex::Regex::new(r"^\d+$").unwrap();
     let regex_trim_number = regex::Regex::new(r"^\d+\.?\s*").unwrap();
     let mut reader = quick_xml::Reader::from_str(&xml_text);
@@ -433,55 +431,101 @@ pub(crate) fn save_pdf_as_xml(
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                if e.name().as_ref() == b"page" {
+                if e.name().as_ref() == "page" {
                     for attr in e.attributes() {
                         let attr = attr?;
-                        if attr.key.as_ref() == b"number" {
-                            page_number = String::from_utf8_lossy(attr.value.as_ref())
-                                .parse::<PageNumber>()
-                                .unwrap_or(0);
+                        if attr.key.as_ref() == "number" {
+                            page_number = attr.value.as_ref().parse::<PageNumber>().unwrap_or(0);
                         }
                     }
-                } else if e.name().as_ref() == b"text" {
+                } else if e.name().as_ref() == "text" {
+                    let attr_of = |name: &str| -> Option<f32> {
+                        e.attributes()
+                            .filter_map(|attr| attr.ok())
+                            .find(|attr| attr.key.as_ref() == name)
+                            .and_then(|attr| attr.value.as_ref().parse::<f32>().ok())
+                    };
                     let font_number = e
                         .attributes()
                         .filter_map(|attr| attr.ok())
-                        .find(|attr| attr.key.as_ref() == b"font")
-                        .map(|attr| {
-                            String::from_utf8_lossy(attr.value.as_ref()).parse::<i32>().unwrap_or(0)
-                        })
+                        .find(|attr| attr.key.as_ref() == "font")
+                        .map(|attr| attr.value.as_ref().parse::<i32>().unwrap_or(0))
                         .unwrap_or(0);
 
                     probably_title = title_font_set.contains(&font_number);
+                    run_top = attr_of("top");
+                    run_left = attr_of("left");
+                    run_width = attr_of("width");
                     continue;
                 }
             }
             Ok(Event::Text(e)) => {
-                let text = String::from_utf8_lossy(e.as_ref());
-                if regex_is_number.is_match(&text) {
+                let raw: &str = e.as_ref();
+
+                // Decide whether this run continues the heading being assembled.
+                //
+                // Small-caps headings reach us in pieces: poppler emits "1", "I" in the
+                // title font and "NTRODUCTION" in the body font, as three runs on one
+                // line. Judging each piece on its own finds no section at all, so glue
+                // runs back together while they stay on the same line and touch.
+                let continues_heading = match (heading.as_ref(), run_top, run_left) {
+                    (Some(open), Some(top), Some(left)) => {
+                        (top - open.top).abs() <= HEADING_LINE_TOLERANCE
+                            && (left - open.right).abs() <= HEADING_GAP_TOLERANCE
+                    }
+                    _ => false,
+                };
+
+                if continues_heading {
+                    if let Some(open) = heading.as_mut() {
+                        let left = run_left.unwrap_or(open.right);
+                        // Word boundaries have to survive the join: the section text is
+                        // later matched against the body text, where the words are spaced.
+                        if left - open.right >= HEADING_SPACE_GAP && !open.text.ends_with(' ') {
+                            open.text.push(' ');
+                        }
+                        open.text.push_str(raw);
+                        open.right = left + run_width.unwrap_or(0.0);
+                    }
                     continue;
                 }
-                let text = regex_trim_number.replace(&text, "").to_string().trim().to_string();
 
-                if text.to_lowercase().trim() == "abstract" {
-                    start_paper = true;
-                    // Record current pending length so we know where "abstract" appeared
-                    // relative to title-font entries. If "abstract" itself is title-font,
-                    // it will be pushed next (at this index). If not, the next title-font
-                    // text will land at this index.
-                    if start_paper_at.is_none() {
-                        start_paper_at = Some(pending_sections.len());
-                    }
+                // This run starts something new, so whatever was being assembled is done.
+                flush_heading(
+                    &mut heading,
+                    &mut pending_sections,
+                    &mut start_paper,
+                    &mut start_paper_at,
+                    &regex_is_number,
+                    &regex_trim_number,
+                );
+
+                if let (true, Some(top), Some(left)) = (probably_title, run_top, run_left) {
+                    heading = Some(OpenHeading {
+                        page: page_number,
+                        top,
+                        right: left + run_width.unwrap_or(0.0),
+                        text: raw.to_string(),
+                    });
+                    continue;
                 }
 
-                if probably_title {
-                    if cfg!(test) {
-                        tracing::info!("Found section title (p{}): {}", page_number, text);
-                    }
-                    pending_sections.push((page_number, text.to_string()));
+                // Not a heading: only the "Abstract" marker matters here.
+                let text = regex_trim_number.replace(raw, "").trim().to_string();
+                if text.to_lowercase() == "abstract" && start_paper_at.is_none() {
+                    start_paper = true;
+                    start_paper_at = Some(pending_sections.len());
                 }
             }
             Ok(Event::Eof) => {
+                flush_heading(
+                    &mut heading,
+                    &mut pending_sections,
+                    &mut start_paper,
+                    &mut start_paper_at,
+                    &regex_is_number,
+                    &regex_trim_number,
+                );
                 break;
             }
             Err(_e) => {
@@ -490,6 +534,14 @@ pub(crate) fn save_pdf_as_xml(
             _ => {}
         }
     }
+
+    tracing::debug!(
+        "Section detection: start_paper={}, start_paper_at={:?}, {} title-font entries: {:?}",
+        start_paper,
+        start_paper_at,
+        pending_sections.len(),
+        pending_sections.iter().take(40).collect::<Vec<_>>()
+    );
 
     // Evaluate buffered sections after loop
     if start_paper {
@@ -523,6 +575,13 @@ pub(crate) fn save_pdf_as_xml(
         }
     }
 
+    if config.sections.is_empty() {
+        tracing::warn!(
+            "No sections detected despite finding title fonts. The document will be \
+             returned as one undivided section — treat its structure as unreliable."
+        );
+    }
+
     if let Some(pb) = pb {
         pb.finish_and_clear();
     }
@@ -532,6 +591,68 @@ pub(crate) fn save_pdf_as_xml(
     }
 
     return Ok(());
+}
+
+/// Vertical slack, in points, for deciding that two runs sit on the same line.
+/// Small-caps continuations sit a couple of points lower than their initial capital.
+const HEADING_LINE_TOLERANCE: f32 = 4.0;
+
+/// Horizontal slack, in points, between the end of one run and the start of the next
+/// before they stop counting as the same word or phrase.
+const HEADING_GAP_TOLERANCE: f32 = 6.0;
+
+/// Gap, in points, at which the join is a word boundary rather than a continuation of
+/// the same word. Measured on small-caps headings: the pieces of one word sit 0-1pt
+/// apart ("R" then "ELATED"), the space between words about 4pt.
+const HEADING_SPACE_GAP: f32 = 3.0;
+
+/// Longest text that is still plausibly a section heading. Anything longer is body
+/// text that merely began with a run in a title font — an inline lead-in such as
+/// "Training Details." — and must not become a section.
+const HEADING_MAX_CHARS: usize = 80;
+
+/// A heading being assembled from consecutive runs on one line.
+struct OpenHeading {
+    page: PageNumber,
+    top: f32,
+    /// Right edge of the last run absorbed, used to test adjacency of the next one.
+    right: f32,
+    text: String,
+}
+
+/// Finishes the heading under construction and records it.
+///
+/// Also notices "Abstract", which marks where the paper proper begins; with small-caps
+/// headings that word only becomes visible once the runs have been glued back together.
+fn flush_heading(
+    heading: &mut Option<OpenHeading>,
+    pending_sections: &mut Vec<(PageNumber, String)>,
+    start_paper: &mut bool,
+    start_paper_at: &mut Option<usize>,
+    regex_is_number: &regex::Regex,
+    regex_trim_number: &regex::Regex,
+) {
+    let Some(open) = heading.take() else {
+        return;
+    };
+
+    let text = regex_trim_number.replace(open.text.trim(), "").trim().to_string();
+    if text.is_empty()
+        || regex_is_number.is_match(&text)
+        || text.chars().count() > HEADING_MAX_CHARS
+    {
+        return;
+    }
+
+    if text.to_lowercase() == "abstract" && start_paper_at.is_none() {
+        *start_paper = true;
+        *start_paper_at = Some(pending_sections.len());
+    }
+
+    if cfg!(test) {
+        tracing::info!("Found section title (p{}): {}", open.page, text);
+    }
+    pending_sections.push((open.page, text));
 }
 
 pub(crate) fn save_pdf_as_text(
