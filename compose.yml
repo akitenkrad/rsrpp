@@ -1,8 +1,0 @@
-services:
-  rsrpp:
-    build:
-      context: ./
-      dockerfile: Dockerfile
-    volumes:
-      - .:/app
-    entrypoint: "/app/target/release/rsrpp"

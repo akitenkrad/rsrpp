@@ -1,10 +1,6 @@
 [config]
 default_to_workspace = false
 
-[tasks.build-no-cache]
-command = "docker"
-args = ["compose", "build", "--pull", "--no-cache", "--progress=plain"]
-
 [tasks.format]
 install_crate = "rustfmt"
 command = "cargo"
@@ -14,12 +10,45 @@ args = ["fmt", "--", "--emit=files"]
 command = "cargo"
 args = ["clean"]
 
-[tasks.build-all]
-command = "docker"
-args = ["compose", "build"]
+[tasks.build]
+command = "cargo"
+args = ["build", "--release", "--workspace"]
 
-[tasks.nextest]
-dependencies = ["build-all"]
-script = """
-docker compose run --rm --entrypoint "" rsrpp cargo nextest run --workspace --status-level all --test-threads=1 ${@}
+# The tests that reach the network, poppler or OpenAI. Everything else is a unit test
+# and runs in seconds, so the two are kept apart: `nextest` stays fast enough to run on
+# every edit, and the slow ones are asked for explicitly.
+[env]
+RSRPP_E2E_FILTER = """
+test(test_parse_extract_sections) + test(=parser::tests::test_parse_1) \
++ test(=parser::tests::test_parse_2) + test(test_parse_local_sample) + test(test_pdf_to_json) \
++ test(test_parse_zep) + test(test_parse_long_document) + test(test_parse_llm_disabled_fallback) \
++ test(test_llm_section_validation_conditional) + test(test_collect_references_text) \
++ test(test_paper_output_format) + test(test_extract_references_conditional) \
++ test(test_math_markup) + test(test_pdf2html) + test(test_save_pdf) + test(test_invalid_pdf_url) \
++ test(test_adjust_columns) + test(test_download)
 """
+
+# Unit tests only. This is the one to run while working.
+[tasks.nextest]
+install_crate = "cargo-nextest"
+command = "cargo"
+args = ["nextest", "run", "--workspace", "--status-level", "fail", "-E", "not (${RSRPP_E2E_FILTER})", "${@}"]
+
+# The slow half: PDFs are fetched (and cached), poppler and OpenCV run for real, and a
+# few tests call the OpenAI API. Needs OPENAI_API_KEY for the LLM ones.
+[tasks.nextest-e2e]
+install_crate = "cargo-nextest"
+command = "cargo"
+args = ["nextest", "run", "--workspace", "--status-level", "all", "-E", "${RSRPP_E2E_FILTER}", "${@}"]
+
+# nextest does not run doc-tests, so they get their own task.
+[tasks.doc-test]
+command = "cargo"
+args = ["test", "--workspace", "--doc"]
+
+# Everything. Run before committing.
+[tasks.nextest-all]
+install_crate = "cargo-nextest"
+command = "cargo"
+args = ["nextest", "run", "--workspace", "--status-level", "all", "${@}"]
+dependencies = ["doc-test"]
