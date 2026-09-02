@@ -3,6 +3,7 @@ use anyhow::{Error, Result};
 use glob::glob;
 use indicatif::ProgressBar;
 use quick_xml::events::Event;
+use regex::Regex;
 use reqwest as request;
 use scraper::html;
 use std::{
@@ -11,6 +12,7 @@ use std::{
     io::Read,
     path::Path,
     process::{Command, Stdio},
+    sync::LazyLock,
     time::Duration,
 };
 
@@ -611,6 +613,30 @@ const HEADING_SPACE_GAP: f32 = 3.0;
 /// "Training Details." — and must not become a section.
 const HEADING_MAX_CHARS: usize = 80;
 
+/// Whether `text` is a bare section label — "A", "1", "B." — carrying no title.
+///
+/// Appendix headings are laid out as a label and a title far enough apart that poppler
+/// reports them separately, in the XML and in the body text alike. The title stands on
+/// its own as the heading; the label would otherwise become a second, one-character
+/// section holding nothing. Joining the two instead was tried and does not work: the
+/// body text keeps them on separate lines, so a joined heading matches nothing there.
+fn is_section_label(text: &str) -> bool {
+    static LABEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9]\.?$").unwrap());
+    LABEL.is_match(text)
+}
+
+/// Whether `text` is a figure sub-label such as "(a)" or "(b) Refusal Rate".
+///
+/// These are set in the same font as the section headings of some papers, so the font
+/// pass cannot tell them apart, and promoting one costs the real section its name: the
+/// body that follows is filed under "(b)" instead of under the section it belongs to.
+/// The parentheses are the giveaway — section labels never carry them.
+fn is_figure_sublabel(text: &str) -> bool {
+    static SUBLABEL: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\(\s*[A-Za-z0-9]{1,3}\s*\)").unwrap());
+    SUBLABEL.is_match(text)
+}
+
 /// A heading being assembled from consecutive runs on one line.
 struct OpenHeading {
     page: PageNumber,
@@ -641,6 +667,15 @@ fn flush_heading(
         || regex_is_number.is_match(&text)
         || text.chars().count() > HEADING_MAX_CHARS
     {
+        return;
+    }
+    // A label that never found a title, or a figure sub-label, is not a section.
+    if is_section_label(&text) || is_figure_sublabel(&text) {
+        tracing::debug!(
+            "Page {}: rejecting {:?} as a section heading",
+            open.page,
+            text
+        );
         return;
     }
 
@@ -762,6 +797,42 @@ mod tests {
     use super::*;
     use crate::config::ParserConfig;
     use crate::test_utils::{BuiltinPaper, TestPapers};
+
+    #[test]
+    fn test_is_section_label_matches_only_a_lone_label() {
+        for label in ["A", "B.", "1", "9."] {
+            assert!(is_section_label(label), "{label} should read as a label");
+        }
+        // The first word of a real heading must not: it would lose its own text.
+        for heading in ["The", "LLM", "AoT", "Abstract", "A Survey", ""] {
+            assert!(
+                !is_section_label(heading),
+                "{heading:?} should not read as a label"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_figure_sublabel_matches_parenthesised_labels() {
+        // "(b)" used to become a section and take the body of the real one with it.
+        for sublabel in ["(a)", "(b) Refusal Rate", "( c )", "(1) Overview"] {
+            assert!(
+                is_figure_sublabel(sublabel),
+                "{sublabel:?} should read as a sub-label"
+            );
+        }
+        for heading in [
+            "Conclusion",
+            "A",
+            "Results (final)",
+            "(experimental) setup x",
+        ] {
+            assert!(
+                !is_figure_sublabel(heading),
+                "{heading:?} should not read as a sub-label"
+            );
+        }
+    }
 
     #[test_log::test(tokio::test)]
     async fn test_pdf2html_url() {
