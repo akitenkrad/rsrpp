@@ -173,9 +173,25 @@ pub(crate) fn save_pdf_as_xml(
         }
     }
 
-    // ── Step 1: Parse <fontspec> elements ──
     let xml_text = std::fs::read_to_string(xml_path)?;
+    detect_sections(config, &xml_text, verbose, time)?;
 
+    return Ok(());
+}
+
+/// Finds the paper's section headings in the XML poppler produced and records them in
+/// [`ParserConfig::sections`].
+///
+/// Split out from [`save_pdf_as_xml`] so that the heading rules can be exercised against
+/// a hand-written XML fragment: reaching them through `save_pdf_as_xml` needs a real PDF
+/// and a run of poppler, which is too coarse to pin a layout down to.
+fn detect_sections(
+    config: &mut ParserConfig,
+    xml_text: &str,
+    verbose: bool,
+    time: std::time::Instant,
+) -> Result<()> {
+    // ── Step 1: Parse <fontspec> elements ──
     struct FontSpec {
         _id: i32,
         size: f32,
@@ -421,11 +437,15 @@ pub(crate) fn save_pdf_as_xml(
     let mut start_paper = false;
     let mut start_paper_at: Option<usize> = None; // index in pending_sections when "abstract" was seen
     let mut probably_title = false;
-    let mut pending_sections: Vec<(PageNumber, String)> = Vec::new();
+    let mut pending_sections: Vec<PendingSection> = Vec::new();
+    // Left and right edge of every body-font run long enough to be a line of prose.
+    // The page's columns are read off these once the pass is over.
+    let mut body_runs: Vec<(f32, f32)> = Vec::new();
     let mut heading: Option<OpenHeading> = None;
     let mut run_top: Option<f32> = None;
     let mut run_left: Option<f32> = None;
     let mut run_width: Option<f32> = None;
+    let mut run_is_body = false;
     let regex_is_number = regex::Regex::new(r"^\d+$").unwrap();
     let regex_trim_number = regex::Regex::new(r"^\d+\.?\s*").unwrap();
     let mut reader = quick_xml::Reader::from_str(&xml_text);
@@ -455,6 +475,7 @@ pub(crate) fn save_pdf_as_xml(
                         .unwrap_or(0);
 
                     probably_title = title_font_set.contains(&font_number);
+                    run_is_body = body_font_id == Some(font_number);
                     run_top = attr_of("top");
                     run_left = attr_of("left");
                     run_width = attr_of("width");
@@ -464,15 +485,27 @@ pub(crate) fn save_pdf_as_xml(
             Ok(Event::Text(e)) => {
                 let raw: &str = e.as_ref();
 
+                if run_is_body && raw.chars().count() >= COLUMN_SAMPLE_CHARS {
+                    if let (Some(left), Some(width)) = (run_left, run_width) {
+                        body_runs.push((left, left + width));
+                    }
+                }
+
                 // Decide whether this run continues the heading being assembled.
                 //
                 // Small-caps headings reach us in pieces: poppler emits "1", "I" in the
                 // title font and "NTRODUCTION" in the body font, as three runs on one
                 // line. Judging each piece on its own finds no section at all, so glue
                 // runs back together while they stay on the same line and touch.
+                //
+                // Only within one page: `top` and `left` are page-relative, so a run at
+                // the top of the next page can sit a few points from a run at the bottom
+                // of this one and read as its continuation, welding two unrelated strings
+                // into a heading that is in no page of the document.
                 let continues_heading = match (heading.as_ref(), run_top, run_left) {
                     (Some(open), Some(top), Some(left)) => {
-                        (top - open.top).abs() <= HEADING_LINE_TOLERANCE
+                        open.page == page_number
+                            && (top - open.top).abs() <= HEADING_LINE_TOLERANCE
                             && (left - open.right).abs() <= HEADING_GAP_TOLERANCE
                     }
                     _ => false,
@@ -506,6 +539,7 @@ pub(crate) fn save_pdf_as_xml(
                     heading = Some(OpenHeading {
                         page: page_number,
                         top,
+                        left,
                         right: left + run_width.unwrap_or(0.0),
                         text: raw.to_string(),
                     });
@@ -542,8 +576,62 @@ pub(crate) fn save_pdf_as_xml(
         start_paper,
         start_paper_at,
         pending_sections.len(),
-        pending_sections.iter().take(40).collect::<Vec<_>>()
+        pending_sections.iter().take(40).map(|s| &s.text).collect::<Vec<_>>()
     );
+
+    // ── Placement pass ──
+    // The font pass cannot tell a section heading from a subplot title or an axis label
+    // set in the same size, and a false heading is not merely noise: it swallows the body
+    // that follows, so the section it belongs to loses that text. Where the run sits on
+    // the page settles what the font left open.
+    let columns = detect_columns(&body_runs);
+    if !columns.is_empty() {
+        let keep: Vec<bool> = pending_sections
+            .iter()
+            .map(|section| {
+                heading_is_placed_like_a_heading(
+                    section,
+                    &pending_sections,
+                    &columns,
+                    anchor_words,
+                    &regex_trim_number,
+                )
+            })
+            .collect();
+        let rejected = keep.iter().filter(|k| !**k).count();
+        // Rejecting most of the headings means the rule and the document disagree about
+        // what this paper's layout is, and the document is the authority. Leave it alone.
+        if rejected * 2 <= keep.len() {
+            for (section, kept) in pending_sections.iter().zip(keep.iter()) {
+                if !kept {
+                    tracing::debug!(
+                        "Page {}: rejecting {:?} — left {:.0} matches no column margin, centre or heading indent",
+                        section.page,
+                        section.text,
+                        section.left
+                    );
+                }
+            }
+            // `start_paper_at` indexes into this list, so it has to move with it.
+            if let Some(index) = start_paper_at.as_mut() {
+                *index = keep[..*index].iter().filter(|k| **k).count();
+            }
+            let mut kept_sections = Vec::with_capacity(keep.len() - rejected);
+            for (section, keep) in pending_sections.into_iter().zip(keep) {
+                if keep {
+                    kept_sections.push(section);
+                }
+            }
+            pending_sections = kept_sections;
+        } else {
+            tracing::debug!(
+                "Skipping the placement pass: it rejects {} of {} headings, so the rule \
+                 does not describe this layout",
+                rejected,
+                keep.len()
+            );
+        }
+    }
 
     // Evaluate buffered sections after loop
     if start_paper {
@@ -554,25 +642,25 @@ pub(crate) fn save_pdf_as_xml(
         // caused all subsequent title-font texts to be pushed directly.
         let skip = start_paper_at.unwrap_or(0);
         for section in pending_sections.into_iter().skip(skip) {
-            config.sections.push(section);
+            config.sections.push((section.page, section.text));
         }
     } else if !pending_sections.is_empty() {
         // Fallback: no "Abstract" heading (e.g. Nature format)
         // Start from the first anchor-word match
-        let first_anchor_idx = pending_sections.iter().position(|(_, text)| {
-            let t = text.to_lowercase();
+        let first_anchor_idx = pending_sections.iter().position(|section| {
+            let t = section.text.to_lowercase();
             let s = regex_trim_number.replace(&t, "").trim().to_string();
             anchor_words.iter().any(|&aw| aw == t.as_str() || aw == s.as_str())
         });
 
         if let Some(idx) = first_anchor_idx {
             // If the first anchor section is beyond page 1, infer an Abstract on page 1
-            let first_page = pending_sections[idx].0;
+            let first_page = pending_sections[idx].page;
             if first_page > 1 {
                 config.sections.push((1, "Abstract".to_string()));
             }
             for section in pending_sections.into_iter().skip(idx) {
-                config.sections.push(section);
+                config.sections.push((section.page, section.text));
             }
         }
     }
@@ -637,10 +725,137 @@ fn is_figure_sublabel(text: &str) -> bool {
     SUBLABEL.is_match(text)
 }
 
+/// A heading the font pass accepted, before the placement rules judge it.
+struct PendingSection {
+    page: PageNumber,
+    /// Left edge of the first run, in points.
+    left: f32,
+    /// Right edge of the last run absorbed, in points.
+    right: f32,
+    text: String,
+}
+
+/// A text column of the page, as the body text draws it.
+struct Column {
+    /// Left margin, in points.
+    margin: f32,
+    /// Right edge, in points.
+    right: f32,
+}
+
+impl Column {
+    fn center(&self) -> f32 {
+        (self.margin + self.right) / 2.0
+    }
+}
+
+/// Shortest run that counts as a line of body text when the columns are measured.
+/// Anything shorter is a caption fragment, a table cell or an axis label, and those
+/// sit wherever the figure put them.
+const COLUMN_SAMPLE_CHARS: usize = 40;
+
+/// Slack, in points, for calling two left edges the same margin.
+const MARGIN_TOLERANCE: f32 = 2.0;
+
+/// Slack, in points, for calling a heading centred on its column. Wider than the margin
+/// tolerance because the centre is the midpoint of two measured edges, so it carries the
+/// error of both, and because a centred heading is only ever centred to the eye.
+const CENTER_TOLERANCE: f32 = 12.0;
+
+/// Reads the page's text columns off the body text.
+///
+/// `runs` holds the left and right edge of every body-font run long enough to be a line
+/// of prose. Their left edges pile up on the margins — one column or two, whichever the
+/// paper uses — and everything else is scattered.
+fn detect_columns(runs: &[(f32, f32)]) -> Vec<Column> {
+    if runs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut histogram: HashMap<i32, usize> = HashMap::new();
+    for (left, _) in runs {
+        *histogram.entry(left.round() as i32).or_insert(0) += 1;
+    }
+    let mut by_frequency: Vec<(i32, usize)> = histogram.into_iter().collect();
+    by_frequency.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+    // A margin has to carry a real share of the body text. The floor of three keeps the
+    // rule from reading a margin out of a two-line document.
+    let minimum = std::cmp::max(3, runs.len() / 20);
+    let mut columns: Vec<Column> = Vec::new();
+    for (left, count) in by_frequency {
+        if count < minimum {
+            break;
+        }
+        let left = left as f32;
+        // Poppler rounds a margin to either side of a point, so a second peak one point
+        // away is the same column seen twice.
+        if columns.iter().any(|column| (column.margin - left).abs() <= 5.0) {
+            continue;
+        }
+        let mut rights: Vec<f32> = runs
+            .iter()
+            .filter(|(run_left, _)| (run_left - left).abs() <= MARGIN_TOLERANCE)
+            .map(|(_, right)| *right)
+            .collect();
+        if rights.is_empty() {
+            continue;
+        }
+        // The widest line overshoots on a hyphenated word or a wide formula; the ninth
+        // decile is the column's right edge as the eye reads it.
+        rights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        columns.push(Column {
+            margin: left,
+            right: rights[rights.len() * 9 / 10],
+        });
+    }
+    columns
+}
+
+/// Whether `section` sits where the page puts a heading.
+///
+/// A heading candidate is only ever a font judgement: the axis labels and legends of a
+/// plot are often set larger than the body text, and `NIAH-Level 1` reads exactly like
+/// `Related Work` on the page. Placement is what separates them. A heading starts at a
+/// column margin, or is centred on a column, or repeats a position another heading uses
+/// on another page — an indent shared by the numbered headings of the paper. A label
+/// inside a figure answers to the figure, so it does none of the three.
+///
+/// Anchor words are exempt: `Abstract`, `Introduction` and the rest are as strong a
+/// signal as any geometry, and one of them off on its own — a centred `Abstract` in a
+/// paper whose sections are flush left — must not be lost to a placement rule.
+fn heading_is_placed_like_a_heading(
+    section: &PendingSection,
+    sections: &[PendingSection],
+    columns: &[Column],
+    anchor_words: &[&str],
+    trim_number: &regex::Regex,
+) -> bool {
+    let text = section.text.to_lowercase();
+    let stripped = trim_number.replace(&text, "").trim().to_string();
+    if anchor_words.contains(&text.as_str()) || anchor_words.contains(&stripped.as_str()) {
+        return true;
+    }
+    if columns.iter().any(|column| (section.left - column.margin).abs() <= MARGIN_TOLERANCE) {
+        return true;
+    }
+    let center = (section.left + section.right) / 2.0;
+    if columns.iter().any(|column| (center - column.center()).abs() <= CENTER_TOLERANCE) {
+        return true;
+    }
+    // Another page using the same position settles it. Same-page agreement does not: the
+    // four subplot titles of one figure agree with each other and are still not sections.
+    sections.iter().any(|other| {
+        other.page != section.page && (other.left - section.left).abs() <= MARGIN_TOLERANCE
+    })
+}
+
 /// A heading being assembled from consecutive runs on one line.
 struct OpenHeading {
     page: PageNumber,
     top: f32,
+    /// Left edge of the first run, kept as the heading's own left through the joins.
+    left: f32,
     /// Right edge of the last run absorbed, used to test adjacency of the next one.
     right: f32,
     text: String,
@@ -652,7 +867,7 @@ struct OpenHeading {
 /// headings that word only becomes visible once the runs have been glued back together.
 fn flush_heading(
     heading: &mut Option<OpenHeading>,
-    pending_sections: &mut Vec<(PageNumber, String)>,
+    pending_sections: &mut Vec<PendingSection>,
     start_paper: &mut bool,
     start_paper_at: &mut Option<usize>,
     regex_is_number: &regex::Regex,
@@ -687,7 +902,12 @@ fn flush_heading(
     if cfg!(test) {
         tracing::info!("Found section title (p{}): {}", open.page, text);
     }
-    pending_sections.push((open.page, text));
+    pending_sections.push(PendingSection {
+        page: open.page,
+        left: open.left,
+        right: open.right,
+        text,
+    });
 }
 
 pub(crate) fn save_pdf_as_text(
@@ -810,6 +1030,176 @@ mod tests {
                 "{heading:?} should not read as a label"
             );
         }
+    }
+
+    /// XML in the shape poppler emits: one body font carrying most of the characters,
+    /// one larger bold font for the headings.
+    fn xml_with_pages(pages: &[&str]) -> String {
+        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<pdf2xml>\n");
+        xml.push_str("<fontspec id=\"0\" size=\"10\" family=\"Times\"/>\n");
+        xml.push_str("<fontspec id=\"1\" size=\"12\" family=\"Times-Bold\"/>\n");
+        for (index, body) in pages.iter().enumerate() {
+            xml.push_str(&format!(
+                "<page number=\"{}\" position=\"absolute\" top=\"0\" left=\"0\" height=\"792\" width=\"612\">\n{}\n</page>\n",
+                index + 1,
+                body
+            ));
+        }
+        xml.push_str("</pdf2xml>\n");
+        xml
+    }
+
+    #[test]
+    fn test_detect_sections_does_not_join_a_heading_across_pages() {
+        // `top` and `left` are page-relative, so a run at the top of one page can land
+        // within a few points of one at the bottom of the previous page and read as its
+        // continuation. Welding the two produces a heading that is on no page at all,
+        // and the real heading on the second page loses its name.
+        let xml = xml_with_pages(&[
+            concat!(
+                "<text top=\"100\" left=\"72\" width=\"50\" height=\"12\" font=\"1\">Abstract</text>\n",
+                "<text top=\"120\" left=\"72\" width=\"400\" height=\"10\" font=\"0\">",
+                "We describe a memory agent trained with reinforcement learning over ",
+                "multiple conversations, and evaluate it on long-context benchmarks.",
+                "</text>\n",
+                // An appendix label left open at the foot of the page.
+                "<text top=\"700\" left=\"72\" width=\"8\" height=\"12\" font=\"1\">A</text>"
+            ),
+            concat!(
+                "<text top=\"702\" left=\"82\" width=\"90\" height=\"12\" font=\"1\">Introduction</text>\n",
+                "<text top=\"722\" left=\"72\" width=\"400\" height=\"10\" font=\"0\">",
+                "Language models forget what they read.</text>"
+            ),
+        ]);
+
+        let mut config = ParserConfig::new();
+        detect_sections(&mut config, &xml, false, std::time::Instant::now()).unwrap();
+
+        let titles: Vec<&str> = config.sections.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(
+            titles.contains(&"Introduction"),
+            "the heading on page 2 must stand on its own, got {:?}",
+            titles
+        );
+        assert!(
+            !titles.iter().any(|t| t.contains("AIntroduction")),
+            "a heading must not span two pages, got {:?}",
+            titles
+        );
+    }
+
+    #[test]
+    fn test_detect_sections_still_joins_small_caps_on_one_line() {
+        // The join exists for small caps: poppler splits "INTRODUCTION" into an initial
+        // in the title font and the rest beside it. Guard that the page check left it
+        // working.
+        let xml = xml_with_pages(&[concat!(
+            "<text top=\"100\" left=\"72\" width=\"50\" height=\"12\" font=\"1\">Abstract</text>\n",
+            "<text top=\"120\" left=\"72\" width=\"400\" height=\"10\" font=\"0\">",
+            "We describe a memory agent trained with reinforcement learning over ",
+            "multiple conversations, and evaluate it on long-context benchmarks.",
+            "</text>\n",
+            "<text top=\"200\" left=\"72\" width=\"8\" height=\"12\" font=\"1\">I</text>\n",
+            "<text top=\"201\" left=\"80\" width=\"80\" height=\"12\" font=\"1\">NTRODUCTION</text>"
+        )]);
+
+        let mut config = ParserConfig::new();
+        detect_sections(&mut config, &xml, false, std::time::Instant::now()).unwrap();
+
+        let titles: Vec<&str> = config.sections.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(
+            titles.contains(&"INTRODUCTION"),
+            "the small-caps heading must be reassembled, got {:?}",
+            titles
+        );
+    }
+
+    /// Four lines of body text at one margin, enough for the column pass to see it.
+    fn body_column(top: f32) -> String {
+        (0..4)
+            .map(|i| {
+                format!(
+                    "<text top=\"{}\" left=\"72\" width=\"400\" height=\"10\" font=\"0\">\
+                     Language models forget what they read, and the memory agent has to \
+                     decide what to keep.</text>",
+                    top + i as f32 * 12.0
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn test_detect_sections_rejects_a_label_inside_a_figure() {
+        // A subplot title is set in the heading font and reads like a heading —
+        // "NIAH-Level 1" is as plausible as "Related Work" — but it sits where the
+        // figure put it, at no column margin and at no other heading's position. Left
+        // standing it becomes a section and takes the body that follows with it.
+        let xml = xml_with_pages(&[format!(
+            concat!(
+                "<text top=\"60\" left=\"72\" width=\"50\" height=\"12\" font=\"1\">Abstract</text>\n",
+                "{}\n",
+                "<text top=\"200\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Introduction</text>\n",
+                "<text top=\"400\" left=\"380\" width=\"60\" height=\"12\" font=\"1\">NIAH-Level 1</text>"
+            ),
+            body_column(80.0)
+        )
+        .as_str()]);
+
+        let mut config = ParserConfig::new();
+        detect_sections(&mut config, &xml, false, std::time::Instant::now()).unwrap();
+
+        let titles: Vec<&str> = config.sections.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(titles.contains(&"Introduction"), "got {:?}", titles);
+        assert!(
+            !titles.contains(&"NIAH-Level 1"),
+            "a label adrift in a figure is not a section, got {:?}",
+            titles
+        );
+    }
+
+    #[test]
+    fn test_detect_sections_keeps_a_heading_centred_on_the_column() {
+        // Some papers centre their headings, so each one starts at a different left and
+        // none starts at the margin. The centre is what they share.
+        let column_center = (72.0 + 472.0) / 2.0;
+        let heading_left = column_center - 50.0;
+        let xml = xml_with_pages(&[format!(
+            concat!(
+                "<text top=\"60\" left=\"72\" width=\"50\" height=\"12\" font=\"1\">Abstract</text>\n",
+                "{}\n",
+                "<text top=\"200\" left=\"{}\" width=\"100\" height=\"12\" font=\"1\">Study 1</text>"
+            ),
+            body_column(80.0),
+            heading_left
+        )
+        .as_str()]);
+
+        let mut config = ParserConfig::new();
+        detect_sections(&mut config, &xml, false, std::time::Instant::now()).unwrap();
+
+        let titles: Vec<&str> = config.sections.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(
+            titles.contains(&"Study 1"),
+            "a centred heading must survive, got {:?}",
+            titles
+        );
+    }
+
+    #[test]
+    fn test_detect_columns_reads_the_margins_off_the_body_text() {
+        // Two columns, and a scatter of figure text that must not become a third.
+        let mut runs: Vec<(f32, f32)> = Vec::new();
+        for _ in 0..20 {
+            runs.push((71.0, 291.0));
+            runs.push((306.0, 526.0));
+        }
+        runs.push((188.0, 240.0));
+        runs.push((417.0, 460.0));
+
+        let columns = detect_columns(&runs);
+        let margins: Vec<f32> = columns.iter().map(|c| c.margin).collect();
+        assert_eq!(margins, vec![71.0, 306.0], "got {:?}", margins);
     }
 
     #[test]
