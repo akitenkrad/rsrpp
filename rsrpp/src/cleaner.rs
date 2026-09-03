@@ -69,16 +69,21 @@ const CAPTION_STEP_TOLERANCE: f32 = 0.5;
 /// reaches 1.60.
 const CAPTION_MAX_LEADING: f32 = 2.0;
 
-/// The font size of a line, taken as the median height of its words.
+/// The font size the caption is set in, taken as the median word height of its first line
+/// that has any words.
 ///
-/// Measured on the caption's own first line, never on the whole block: where poppler has
-/// merged a table into the block, the cells would otherwise set the scale that the
-/// caption is then judged against.
-fn line_font_size(line: &Line) -> f32 {
+/// Measured on the caption itself, never on the whole block: where poppler has merged a
+/// table into the block, the cells would otherwise set the scale that the caption is then
+/// judged against. One line rather than two for the same reason — the second line of the
+/// block may already be a table row, and letting it set the scale is exactly what the
+/// bounds below exist to prevent. A line with no words has no size to offer and is passed
+/// over; a block of nothing but those returns 0, which the caller reads as "no scale to
+/// judge by" rather than as a bound of zero.
+fn caption_font_size(block: &Block) -> f32 {
+    let Some(line) = block.lines.iter().find(|line| !line.words.is_empty()) else {
+        return 0.0;
+    };
     let mut heights: Vec<f32> = line.words.iter().map(|word| word.height).collect();
-    if heights.is_empty() {
-        return line.height;
-    }
     heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     heights[heights.len() / 2]
 }
@@ -99,7 +104,7 @@ pub fn caption_line_span(block: &Block) -> usize {
         return 0;
     }
 
-    let font_size = line_font_size(&block.lines[0]);
+    let font_size = caption_font_size(block);
     let left = block.lines[0].x;
     let mut leading: Option<f32> = None;
     let mut span = 1;
@@ -108,12 +113,19 @@ pub fn caption_line_span(block: &Block) -> usize {
         let (previous, line) = (&pair[0], &pair[1]);
         let step = line.y - previous.y;
         // Lines that share a baseline sit side by side, which caption text never does,
-        // and a line a paragraph's width below is no longer the same paragraph.
-        if step <= 0.0 || step > CAPTION_MAX_LEADING * font_size {
+        // and a line a paragraph's width below is no longer the same paragraph. With no
+        // font size to scale them by, the two bounds would read as zero and cut every
+        // caption to its first line, so they stand down and the leading decides alone.
+        if step <= 0.0 {
             break;
         }
-        if (line.x - left).abs() > CAPTION_LEFT_TOLERANCE * font_size {
-            break;
+        if font_size > 0.0 {
+            if step > CAPTION_MAX_LEADING * font_size {
+                break;
+            }
+            if (line.x - left).abs() > CAPTION_LEFT_TOLERANCE * font_size {
+                break;
+            }
         }
         match leading {
             None => leading = Some(step),
@@ -329,6 +341,25 @@ mod tests {
             (140.0, 72.0, "Model A"),
         ]);
         assert_eq!(caption_line_span(&block), 2);
+    }
+
+    #[test]
+    fn test_caption_line_span_survives_a_first_line_without_words() {
+        // A line with no words has no font size. Reading zero out of it and scaling the
+        // bounds by it would cut every such caption to a single line.
+        let mut block = Block::new(0.0, 0.0, 400.0, 100.0);
+        block.lines.push(Line::new(72.0, 100.0, 200.0, 0.0));
+        for (y, text) in [
+            (111.0, "Table 2: Accuracy by model on the held-out split"),
+            (122.0, "averaged over five seeds."),
+        ] {
+            let mut line = Line::new(72.0, y, 200.0, 10.0);
+            for word in text.split_whitespace() {
+                line.add_word(word.to_string(), 72.0, y, 10.0, 10.0);
+            }
+            block.lines.push(line);
+        }
+        assert_eq!(caption_line_span(&block), 3);
     }
 
     #[test]

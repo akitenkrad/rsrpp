@@ -314,6 +314,13 @@ pub(crate) fn parse_extract_textarea(
     pages: &mut Vec<Page>,
 ) -> Result<()> {
     let title_index_regex = regex::Regex::new(r"^\d+\.?\s*").unwrap();
+    // Matched on the text alone, deliberately. Pairing each title with the page it was
+    // found on is the tighter rule and reads like the right one — the section assignment
+    // checks the page, so why not this — but the two do not agree about which page a
+    // heading is on often enough to risk it: on arXiv P00001552 it deletes the headings
+    // of three real sections ("The Audit Data", "The IDES Design", "Anomalies"), while
+    // over 300 vault papers the running headers it would save us amount to one block.
+    // Losing a heading costs a whole section; keeping a stray one costs a line.
     let section_titles = config
         .sections
         .iter()
@@ -1246,6 +1253,47 @@ mod tests {
         assert!(
             !config.dropped_texts.iter().any(|d| d.text.contains("Related Work")),
             "and must not be recorded as dropped"
+        );
+    }
+
+    #[test]
+    fn test_parse_extract_textarea_spares_a_heading_wherever_it_was_found() {
+        // The exemption matches a heading's text without asking which page it was found
+        // on. Tying it to the page deletes real headings on documents where the two
+        // halves of poppler disagree about the numbering, and the stray running headers
+        // that a looser rule keeps are worth far less than a section.
+        let mut pages: Vec<Page> = Vec::new();
+        for page_number in 1..=3 {
+            let mut page = Page::new(595.0, 842.0, page_number);
+            for y in [100.0, 200.0, 300.0, 400.0, 500.0] {
+                let mut block = Block::new(100.0, y, 400.0, 20.0);
+                let mut line = Line::new(100.0, y, 400.0, 20.0);
+                for word in
+                    "a paragraph of body text that fills the measured area".split_whitespace()
+                {
+                    line.add_word(word.to_string(), 100.0, y, 20.0, 10.0);
+                }
+                block.lines.push(line);
+            }
+            pages.push(page);
+        }
+        // The heading, out where the text area does not reach, on a page other than the
+        // one the section was recorded against.
+        let mut heading = Block::new(5.0, 810.0, 60.0, 12.0);
+        let mut line = Line::new(5.0, 810.0, 60.0, 12.0);
+        for word in "Related Work".split_whitespace() {
+            line.add_word(word.to_string(), 5.0, 810.0, 20.0, 10.0);
+        }
+        heading.lines.push(line);
+        pages[0].blocks.push(heading);
+
+        let mut config = ParserConfig::new();
+        config.sections.push((3, "Related Work".to_string()));
+        parse_extract_textarea(&mut config, &mut pages).unwrap();
+
+        assert!(
+            pages[0].blocks.iter().any(|b| b.get_text().trim() == "Related Work"),
+            "the heading survives even though the section was recorded on another page"
         );
     }
 

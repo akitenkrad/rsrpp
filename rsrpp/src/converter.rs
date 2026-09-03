@@ -751,7 +751,12 @@ fn is_figure_sublabel(text: &str) -> bool {
 /// under it: on eight of three hundred vault papers that was 327,000 characters, once an
 /// entire 67,000-character paper.
 fn is_arxiv_stamp(text: &str) -> bool {
-    static STAMP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^arxiv[:\s]").unwrap());
+    // The identifier has to be there. Without it the rule also rejects a heading that
+    // merely names arXiv — "arXiv: A Large-Scale Dataset" is a title a paper about arXiv
+    // could carry, and a section is a poor thing to lose to a prefix match.
+    static STAMP: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)^arxiv[:\s]\s*(\d{4}\.\d{4,5}|[a-z-]+(\.[a-z]{2})?/\d{7})").unwrap()
+    });
     STAMP.is_match(text)
 }
 
@@ -792,9 +797,9 @@ const MARGIN_TOLERANCE: f32 = 2.0;
 /// a single wrong verdict would cost it a large share of its sections.
 const PLACEMENT_MIN_HEADINGS: usize = 5;
 
-/// Widest gap, in points, between two neighbouring left edges that are still read as one
-/// margin. Wide enough to absorb the fringe poppler reports around a margin, narrow
-/// enough to keep the two columns of a two-column paper apart.
+/// Widest a cluster of left edges may span, in points, and still be read as one margin.
+/// Wide enough to absorb the fringe poppler reports around a margin, narrow enough to
+/// keep the two columns of a two-column paper apart.
 const COLUMN_CLUSTER_SPAN: i32 = 5;
 
 /// Slack, in points, for calling a heading centred on its column. Wider than the margin
@@ -826,6 +831,12 @@ fn detect_columns(runs: &[(f32, f32)]) -> Vec<Column> {
     // on seven arXiv papers, three of them have margins that are lost that way.
     let mut clusters: Vec<Vec<(i32, usize)>> = Vec::new();
     for bin in bins {
+        // Against the cluster's last bin, which chains: left edges at 70, 75, 80, 85 join
+        // into one cluster spanning fifteen points. Measuring from the first bin instead
+        // is the tighter rule and was tried; over 300 vault papers it costs arXiv
+        // P00001552 the headings of three real sections and returns one real section and
+        // one table header elsewhere. A margin drawn a little too wide is cheap; a
+        // section that never reaches the output is not.
         match clusters.last_mut() {
             Some(cluster) if (bin.0 - cluster.last().unwrap().0) <= COLUMN_CLUSTER_SPAN => {
                 cluster.push(bin)
@@ -844,9 +855,13 @@ fn detect_columns(runs: &[(f32, f32)]) -> Vec<Column> {
         }
         // The cluster's busiest bin is the margin; the rest are its fringe.
         let left = cluster.iter().max_by_key(|(_, count)| *count).unwrap().0 as f32;
+        // The right edge is measured over the same runs the count was taken from, so that
+        // a cluster cannot clear the threshold on one set of lines and be measured on
+        // another.
+        let (first, last) = (cluster[0].0 as f32, cluster[cluster.len() - 1].0 as f32);
         let mut rights: Vec<f32> = runs
             .iter()
-            .filter(|(run_left, _)| (run_left - left).abs() <= COLUMN_CLUSTER_SPAN as f32)
+            .filter(|(run_left, _)| (first..=last).contains(&run_left.round()))
             .map(|(_, right)| *right)
             .collect();
         if rights.is_empty() {
@@ -1393,6 +1408,29 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_columns_joins_a_run_of_close_bins() {
+        // Left edges every five points chain into one margin. That is deliberate, not an
+        // oversight: measured over 300 vault papers, splitting them costs more sections
+        // than it saves. The right edge is measured over the whole chain, so the margin
+        // is described by the same lines that were counted for it.
+        let mut runs: Vec<(f32, f32)> = Vec::new();
+        for (left, times) in [(70.0, 9), (75.0, 9), (80.0, 9), (85.0, 9)] {
+            for _ in 0..times {
+                runs.push((left, 291.0));
+            }
+        }
+
+        let columns = detect_columns(&runs);
+        let margins: Vec<f32> = columns.iter().map(|c| c.margin).collect();
+        assert_eq!(
+            margins.len(),
+            1,
+            "a run of close bins is one margin: {:?}",
+            margins
+        );
+    }
+
+    #[test]
     fn test_detect_columns_reads_the_margins_off_the_body_text() {
         // Two columns, and a scatter of figure text that must not become a third.
         let mut runs: Vec<(f32, f32)> = Vec::new();
@@ -1418,7 +1456,15 @@ mod tests {
         ] {
             assert!(is_arxiv_stamp(stamp), "{stamp:?} should read as the stamp");
         }
-        for heading in ["Abstract", "Introduction", "Archival Research", "A Survey"] {
+        for heading in [
+            "Abstract",
+            "Introduction",
+            "Archival Research",
+            "A Survey",
+            // Names arXiv, but carries no identifier: a heading, not the stamp.
+            "arXiv: A Large-Scale Dataset of Preprints",
+            "arXiv Search and URLs",
+        ] {
             assert!(
                 !is_arxiv_stamp(heading),
                 "{heading:?} should not read as the stamp"
