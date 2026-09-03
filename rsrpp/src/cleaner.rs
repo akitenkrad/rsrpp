@@ -7,7 +7,7 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use crate::models::{Block, BlockType, Page};
+use crate::models::{Block, BlockType, Line, Page};
 
 /// Pre-compiled regex patterns for caption detection.
 /// Matches patterns like:
@@ -58,12 +58,26 @@ const CAPTION_LEFT_TOLERANCE: f32 = 0.5;
 /// caption block varies by more than 16%.
 const CAPTION_STEP_TOLERANCE: f32 = 0.5;
 
-/// The font size of a block, taken as the median height of its words.
-fn block_font_size(block: &Block) -> f32 {
-    let mut heights: Vec<f32> =
-        block.lines.iter().flat_map(|line| line.words.iter()).map(|word| word.height).collect();
+/// Widest step between two lines, as a multiple of the font size, that still reads as
+/// the next line of the same paragraph rather than the start of something else.
+///
+/// This is what the step tolerance above cannot judge: the first line to follow the
+/// caption has no established leading to be compared against, so without an absolute
+/// bound it is accepted however far below the caption it sits — and a one-line caption
+/// printed above a table would hand the first row to the body text. Across the caption
+/// blocks of seven arXiv papers the step is 1.34 font sizes at the median and never
+/// reaches 1.60.
+const CAPTION_MAX_LEADING: f32 = 2.0;
+
+/// The font size of a line, taken as the median height of its words.
+///
+/// Measured on the caption's own first line, never on the whole block: where poppler has
+/// merged a table into the block, the cells would otherwise set the scale that the
+/// caption is then judged against.
+fn line_font_size(line: &Line) -> f32 {
+    let mut heights: Vec<f32> = line.words.iter().map(|word| word.height).collect();
     if heights.is_empty() {
-        return block.lines.first().map(|line| line.height).unwrap_or(0.0);
+        return line.height;
     }
     heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     heights[heights.len() / 2]
@@ -85,7 +99,7 @@ pub fn caption_line_span(block: &Block) -> usize {
         return 0;
     }
 
-    let font_size = block_font_size(block);
+    let font_size = line_font_size(&block.lines[0]);
     let left = block.lines[0].x;
     let mut leading: Option<f32> = None;
     let mut span = 1;
@@ -93,8 +107,9 @@ pub fn caption_line_span(block: &Block) -> usize {
     for pair in block.lines.windows(2) {
         let (previous, line) = (&pair[0], &pair[1]);
         let step = line.y - previous.y;
-        // Lines that share a baseline sit side by side, which caption text never does.
-        if step <= 0.0 {
+        // Lines that share a baseline sit side by side, which caption text never does,
+        // and a line a paragraph's width below is no longer the same paragraph.
+        if step <= 0.0 || step > CAPTION_MAX_LEADING * font_size {
             break;
         }
         if (line.x - left).abs() > CAPTION_LEFT_TOLERANCE * font_size {
@@ -268,6 +283,40 @@ mod tests {
             (123.0, 330.0, "WSJ 23 F1"),
         ]);
         assert_eq!(caption_line_span(&block), 2);
+    }
+
+    #[test]
+    fn test_caption_line_span_stops_below_a_one_line_caption() {
+        // A one-line caption gives the next line no leading to be measured against, so
+        // an absolute bound is all that keeps a table header printed below it — same
+        // margin, but a paragraph's width away — from being read as more caption.
+        let block = block_with_lines(&[
+            (100.0, 72.0, "Table 1: Results"),
+            (160.0, 72.0, "Model"),
+            (160.0, 200.0, "Accuracy"),
+        ]);
+        assert_eq!(caption_line_span(&block), 1);
+    }
+
+    #[test]
+    fn test_caption_line_span_measures_the_captions_own_font() {
+        // The table merged into the block is set larger than the caption. Scaling the
+        // tolerances to it would slacken them for text they are not measuring.
+        let mut block = block_with_lines(&[(100.0, 72.0, "Table 1: Results")]);
+        // Set larger, and in enough words to carry the median of the whole block. Judged
+        // by that median the first row is within a caption's leading of the caption;
+        // judged by the caption's own 10pt it is half a page away.
+        for (y, x, text) in [
+            (130.0, 74.0, "Model A scored 91.2 on average"),
+            (170.0, 74.0, "Model B scored 89.7 on average"),
+        ] {
+            let mut line = Line::new(x, y, 200.0, 24.0);
+            for word in text.split_whitespace() {
+                line.add_word(word.to_string(), x, y, 24.0, 24.0);
+            }
+            block.lines.push(line);
+        }
+        assert_eq!(caption_line_span(&block), 1);
     }
 
     #[test]

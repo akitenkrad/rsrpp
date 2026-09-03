@@ -585,13 +585,31 @@ fn detect_sections(
     // that follows, so the section it belongs to loses that text. Where the run sits on
     // the page settles what the font left open.
     let columns = detect_columns(&body_runs);
-    if !columns.is_empty() {
+    // Under a handful of candidates there is not enough of the paper on show to read its
+    // layout from, and one wrong verdict is then a large share of its sections.
+    if !columns.is_empty() && pending_sections.len() >= PLACEMENT_MIN_HEADINGS {
+        // Two passes. The first admits only candidates that answer to the page itself —
+        // an anchor word, a column margin, a column centre. The second lets the rest
+        // appeal to those, and to no one else, so that candidates of unknown standing
+        // cannot vouch for each other.
+        let established: Vec<PendingSection> = pending_sections
+            .iter()
+            .filter(|section| {
+                heading_stands_on_its_own(section, &columns, anchor_words, &regex_trim_number)
+            })
+            .map(|section| PendingSection {
+                page: section.page,
+                left: section.left,
+                right: section.right,
+                text: section.text.clone(),
+            })
+            .collect();
         let keep: Vec<bool> = pending_sections
             .iter()
             .map(|section| {
                 heading_is_placed_like_a_heading(
                     section,
-                    &pending_sections,
+                    &established,
                     &columns,
                     anchor_words,
                     &regex_trim_number,
@@ -601,7 +619,7 @@ fn detect_sections(
         let rejected = keep.iter().filter(|k| !**k).count();
         // Rejecting most of the headings means the rule and the document disagree about
         // what this paper's layout is, and the document is the authority. Leave it alone.
-        if rejected * 2 <= keep.len() {
+        if rejected * 2 < keep.len() {
             for (section, kept) in pending_sections.iter().zip(keep.iter()) {
                 if !kept {
                     tracing::debug!(
@@ -757,6 +775,16 @@ const COLUMN_SAMPLE_CHARS: usize = 40;
 /// Slack, in points, for calling two left edges the same margin.
 const MARGIN_TOLERANCE: f32 = 2.0;
 
+/// Fewest heading candidates a document must offer before the placement pass will judge
+/// them. Below this the paper has not shown enough of its layout to be held to it, and
+/// a single wrong verdict would cost it a large share of its sections.
+const PLACEMENT_MIN_HEADINGS: usize = 5;
+
+/// Widest gap, in points, between two neighbouring left edges that are still read as one
+/// margin. Wide enough to absorb the fringe poppler reports around a margin, narrow
+/// enough to keep the two columns of a two-column paper apart.
+const COLUMN_CLUSTER_SPAN: i32 = 5;
+
 /// Slack, in points, for calling a heading centred on its column. Wider than the margin
 /// tolerance because the centre is the midpoint of two measured edges, so it carries the
 /// error of both, and because a centred heading is only ever centred to the eye.
@@ -776,26 +804,37 @@ fn detect_columns(runs: &[(f32, f32)]) -> Vec<Column> {
     for (left, _) in runs {
         *histogram.entry(left.round() as i32).or_insert(0) += 1;
     }
-    let mut by_frequency: Vec<(i32, usize)> = histogram.into_iter().collect();
-    by_frequency.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let mut bins: Vec<(i32, usize)> = histogram.into_iter().collect();
+    bins.sort_by_key(|(left, _)| *left);
+
+    // Cluster before counting, not after. One margin reaches poppler as several left
+    // edges a point or two apart — justification, an italic first word, the rounding
+    // itself — and a margin whose text is split over three such bins is a margin whose
+    // bins may each fall under the threshold while their sum clears it easily. Measured
+    // on seven arXiv papers, three of them have margins that are lost that way.
+    let mut clusters: Vec<Vec<(i32, usize)>> = Vec::new();
+    for bin in bins {
+        match clusters.last_mut() {
+            Some(cluster) if (bin.0 - cluster.last().unwrap().0) <= COLUMN_CLUSTER_SPAN => {
+                cluster.push(bin)
+            }
+            _ => clusters.push(vec![bin]),
+        }
+    }
 
     // A margin has to carry a real share of the body text. The floor of three keeps the
     // rule from reading a margin out of a two-line document.
     let minimum = std::cmp::max(3, runs.len() / 20);
     let mut columns: Vec<Column> = Vec::new();
-    for (left, count) in by_frequency {
-        if count < minimum {
-            break;
-        }
-        let left = left as f32;
-        // Poppler rounds a margin to either side of a point, so a second peak one point
-        // away is the same column seen twice.
-        if columns.iter().any(|column| (column.margin - left).abs() <= 5.0) {
+    for cluster in clusters {
+        if cluster.iter().map(|(_, count)| count).sum::<usize>() < minimum {
             continue;
         }
+        // The cluster's busiest bin is the margin; the rest are its fringe.
+        let left = cluster.iter().max_by_key(|(_, count)| *count).unwrap().0 as f32;
         let mut rights: Vec<f32> = runs
             .iter()
-            .filter(|(run_left, _)| (run_left - left).abs() <= MARGIN_TOLERANCE)
+            .filter(|(run_left, _)| (run_left - left).abs() <= COLUMN_CLUSTER_SPAN as f32)
             .map(|(_, right)| *right)
             .collect();
         if rights.is_empty() {
@@ -812,21 +851,19 @@ fn detect_columns(runs: &[(f32, f32)]) -> Vec<Column> {
     columns
 }
 
-/// Whether `section` sits where the page puts a heading.
+/// Whether `section` stands on its own as a heading, without leaning on another candidate.
 ///
 /// A heading candidate is only ever a font judgement: the axis labels and legends of a
 /// plot are often set larger than the body text, and `NIAH-Level 1` reads exactly like
 /// `Related Work` on the page. Placement is what separates them. A heading starts at a
-/// column margin, or is centred on a column, or repeats a position another heading uses
-/// on another page — an indent shared by the numbered headings of the paper. A label
-/// inside a figure answers to the figure, so it does none of the three.
+/// column margin or is centred on a column; a label inside a figure answers to the
+/// figure, so it does neither.
 ///
 /// Anchor words are exempt: `Abstract`, `Introduction` and the rest are as strong a
 /// signal as any geometry, and one of them off on its own — a centred `Abstract` in a
 /// paper whose sections are flush left — must not be lost to a placement rule.
-fn heading_is_placed_like_a_heading(
+fn heading_stands_on_its_own(
     section: &PendingSection,
-    sections: &[PendingSection],
     columns: &[Column],
     anchor_words: &[&str],
     trim_number: &regex::Regex,
@@ -840,12 +877,29 @@ fn heading_is_placed_like_a_heading(
         return true;
     }
     let center = (section.left + section.right) / 2.0;
-    if columns.iter().any(|column| (center - column.center()).abs() <= CENTER_TOLERANCE) {
+    columns.iter().any(|column| (center - column.center()).abs() <= CENTER_TOLERANCE)
+}
+
+/// Whether `section` sits where this paper puts a heading.
+///
+/// Numbered headings sit at an indent rather than at the margin — the number is at the
+/// margin and the title beside it — so the indent has to be learned from the paper. It
+/// is learned only from headings that already stand on their own, and only across pages:
+/// judging a candidate by any other candidate lets two labels printed at the same spot
+/// in two figures vouch for each other, which is the very thing this pass exists to
+/// catch, and judging it by a candidate on its own page lets the four subplot titles of
+/// one figure do the same.
+fn heading_is_placed_like_a_heading(
+    section: &PendingSection,
+    established: &[PendingSection],
+    columns: &[Column],
+    anchor_words: &[&str],
+    trim_number: &regex::Regex,
+) -> bool {
+    if heading_stands_on_its_own(section, columns, anchor_words, trim_number) {
         return true;
     }
-    // Another page using the same position settles it. Same-page agreement does not: the
-    // four subplot titles of one figure agree with each other and are still not sections.
-    sections.iter().any(|other| {
+    established.iter().any(|other| {
         other.page != section.page && (other.left - section.left).abs() <= MARGIN_TOLERANCE
     })
 }
@@ -1140,6 +1194,9 @@ mod tests {
                 "<text top=\"60\" left=\"72\" width=\"50\" height=\"12\" font=\"1\">Abstract</text>\n",
                 "{}\n",
                 "<text top=\"200\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Introduction</text>\n",
+                "<text top=\"260\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Related Work</text>\n",
+                "<text top=\"320\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Experiments</text>\n",
+                "<text top=\"360\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Conclusion</text>\n",
                 "<text top=\"400\" left=\"380\" width=\"60\" height=\"12\" font=\"1\">NIAH-Level 1</text>"
             ),
             body_column(80.0)
@@ -1183,6 +1240,142 @@ mod tests {
             titles.contains(&"Study 1"),
             "a centred heading must survive, got {:?}",
             titles
+        );
+    }
+
+    #[test]
+    fn test_detect_sections_rejects_labels_that_only_vouch_for_each_other() {
+        // The same subplot title printed at the same spot on two pages. Judging one
+        // candidate by another of unknown standing lets the pair carry each other past
+        // the pass that exists to catch them; only headings that answer to the page —
+        // an anchor word, a margin, a centre — may be appealed to.
+        let label = "<text top=\"400\" left=\"380\" width=\"60\" height=\"12\" font=\"1\">NIAH-Level 1</text>";
+        let xml = xml_with_pages(&[
+            format!(
+                concat!(
+                    "<text top=\"60\" left=\"72\" width=\"50\" height=\"12\" font=\"1\">Abstract</text>\n",
+                    "{}\n",
+                    "<text top=\"200\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Introduction</text>\n",
+                    "<text top=\"260\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Related Work</text>\n",
+                    "<text top=\"320\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Experiments</text>\n",
+                    "{}"
+                ),
+                body_column(80.0),
+                label
+            )
+            .as_str(),
+            format!(
+                concat!(
+                    "{}\n",
+                    "<text top=\"300\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Conclusion</text>\n",
+                    "{}"
+                ),
+                body_column(60.0),
+                label
+            )
+            .as_str(),
+        ]);
+
+        let mut config = ParserConfig::new();
+        detect_sections(&mut config, &xml, false, std::time::Instant::now()).unwrap();
+
+        let titles: Vec<&str> = config.sections.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(titles.contains(&"Conclusion"), "got {:?}", titles);
+        assert!(
+            !titles.contains(&"NIAH-Level 1"),
+            "two labels must not vouch for each other, got {:?}",
+            titles
+        );
+    }
+
+    #[test]
+    fn test_detect_sections_learns_the_indent_of_numbered_headings() {
+        // Numbered headings sit at an indent, not at the margin: the number is at the
+        // margin and the title beside it. An appendix heading at that indent, with no
+        // anchor word of its own, is carried by the headings that established it.
+        let xml = xml_with_pages(&[
+            format!(
+                concat!(
+                    "<text top=\"60\" left=\"72\" width=\"50\" height=\"12\" font=\"1\">Abstract</text>\n",
+                    "{}\n",
+                    "<text top=\"200\" left=\"91\" width=\"90\" height=\"12\" font=\"1\">Introduction</text>\n",
+                    "<text top=\"260\" left=\"91\" width=\"90\" height=\"12\" font=\"1\">Related Work</text>\n",
+                    "<text top=\"320\" left=\"91\" width=\"90\" height=\"12\" font=\"1\">Experiments</text>"
+                ),
+                body_column(80.0)
+            )
+            .as_str(),
+            format!(
+                concat!(
+                    "{}\n",
+                    "<text top=\"300\" left=\"91\" width=\"140\" height=\"12\" font=\"1\">Implementation Details</text>"
+                ),
+                body_column(60.0)
+            )
+            .as_str(),
+        ]);
+
+        let mut config = ParserConfig::new();
+        detect_sections(&mut config, &xml, false, std::time::Instant::now()).unwrap();
+
+        let titles: Vec<&str> = config.sections.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(
+            titles.contains(&"Implementation Details"),
+            "the appendix heading shares the indent of the numbered ones, got {:?}",
+            titles
+        );
+    }
+
+    #[test]
+    fn test_detect_sections_stands_down_on_a_document_with_few_headings() {
+        // Three candidates is not enough of a layout to hold the paper to, and rejecting
+        // one of them would cost it a third of its sections.
+        let xml = xml_with_pages(&[format!(
+            concat!(
+                "<text top=\"60\" left=\"72\" width=\"50\" height=\"12\" font=\"1\">Abstract</text>\n",
+                "{}\n",
+                "<text top=\"200\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Introduction</text>\n",
+                "<text top=\"400\" left=\"380\" width=\"60\" height=\"12\" font=\"1\">Findings</text>"
+            ),
+            body_column(80.0)
+        )
+        .as_str()]);
+
+        let mut config = ParserConfig::new();
+        detect_sections(&mut config, &xml, false, std::time::Instant::now()).unwrap();
+
+        let titles: Vec<&str> = config.sections.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(
+            titles.contains(&"Findings"),
+            "the pass must not judge a document this small, got {:?}",
+            titles
+        );
+    }
+
+    #[test]
+    fn test_detect_columns_merges_a_margin_split_across_bins() {
+        // One margin reaches poppler as a few left edges a point or two apart. Counting
+        // the bins separately can leave each under the threshold while their sum clears
+        // it, and the margin is then never found at all.
+        let mut runs: Vec<(f32, f32)> = Vec::new();
+        for _ in 0..400 {
+            runs.push((71.0, 291.0));
+        }
+        // 21 runs at one margin, spread over three bins. The threshold is 21, so every
+        // bin is under it on its own and the cluster is exactly on it.
+        for (left, times) in [(77.0, 8), (78.0, 7), (80.0, 6)] {
+            for _ in 0..times {
+                runs.push((left, 291.0));
+            }
+        }
+
+        let columns = detect_columns(&runs);
+        let margins: Vec<f32> = columns.iter().map(|c| c.margin).collect();
+        assert_eq!(
+            margins,
+            vec![71.0, 77.0],
+            "the split margin must survive as its busiest bin, got {:?}",
+            margins
         );
     }
 
