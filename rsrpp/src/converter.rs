@@ -743,6 +743,18 @@ fn is_figure_sublabel(text: &str) -> bool {
     SUBLABEL.is_match(text)
 }
 
+/// Whether `text` is the arXiv stamp printed down the side of a preprint's first page.
+///
+/// It is set in its own font, larger than the body text, and it is rotated, so poppler
+/// reports it at the very top of the page — ahead of the title. Left standing it becomes
+/// the first heading of the paper and everything up to the next real heading is filed
+/// under it: on eight of three hundred vault papers that was 327,000 characters, once an
+/// entire 67,000-character paper.
+fn is_arxiv_stamp(text: &str) -> bool {
+    static STAMP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^arxiv[:\s]").unwrap());
+    STAMP.is_match(text)
+}
+
 /// A heading the font pass accepted, before the placement rules judge it.
 struct PendingSection {
     page: PageNumber,
@@ -938,8 +950,9 @@ fn flush_heading(
     {
         return;
     }
-    // A label that never found a title, or a figure sub-label, is not a section.
-    if is_section_label(&text) || is_figure_sublabel(&text) {
+    // A label that never found a title, a figure sub-label, or the arXiv stamp printed
+    // down the side of the page, is not a section.
+    if is_section_label(&text) || is_figure_sublabel(&text) || is_arxiv_stamp(&text) {
         tracing::debug!(
             "Page {}: rejecting {:?} as a section heading",
             open.page,
@@ -1393,6 +1406,24 @@ mod tests {
         let columns = detect_columns(&runs);
         let margins: Vec<f32> = columns.iter().map(|c| c.margin).collect();
         assert_eq!(margins, vec![71.0, 306.0], "got {:?}", margins);
+    }
+
+    #[test]
+    fn test_is_arxiv_stamp_matches_the_side_stamp() {
+        for stamp in [
+            "arXiv:2607.00911v1  [cs.SE]  1 Jul 2026",
+            "arXiv:1802.09089v2 [cs.CR] 27 May 2018",
+            "arXiv:cs/0701001v1",
+            "ARXIV 2606.12828",
+        ] {
+            assert!(is_arxiv_stamp(stamp), "{stamp:?} should read as the stamp");
+        }
+        for heading in ["Abstract", "Introduction", "Archival Research", "A Survey"] {
+            assert!(
+                !is_arxiv_stamp(heading),
+                "{heading:?} should not read as the stamp"
+            );
+        }
     }
 
     #[test]
