@@ -341,10 +341,19 @@ pub(crate) fn parse_extract_textarea(
             let iou = text_area.iou(&block_coord);
             let block_text = normalize_section_key(&block.get_text(), &title_index_regex);
 
-            if (iou - 0.0).abs() < 1e-6 {
+            // A block carrying a detected section heading is never deleted on geometry.
+            // The heading came from font analysis, which is far more reliable, and losing
+            // it costs the paper the whole section: the body text no longer holds the
+            // line the heading is matched against, so the section never reaches the
+            // output and its text is filed under the section before it. The narrow-block
+            // rule below has always spared them, and so does `filter_table_regions`;
+            // the text-area rule was the one place the exemption was missing.
+            let is_section_title = section_titles.contains(&block_text);
+
+            if !is_section_title && (iou - 0.0).abs() < 1e-6 {
                 remove_indices.push((i, DropReason::OutsideTextArea));
             } else if !full_text_mode
-                && !section_titles.contains(&block_text)
+                && !is_section_title
                 && (block.width / width < 0.3 && block.lines.len() < 4)
             {
                 // Only apply section-based filtering if not in full text mode
@@ -1186,6 +1195,57 @@ mod tests {
             4,
             "every cell goes, and goes on the record: {:?}",
             config.dropped_texts
+        );
+    }
+
+    #[test]
+    fn test_parse_extract_textarea_keeps_a_section_title_outside_the_area() {
+        // A heading that falls outside the measured text area used to be deleted with no
+        // exemption, unlike the narrow-block rule beside it and unlike the table-region
+        // filter. Losing it costs the paper the whole section: the body text no longer
+        // holds the line the heading is matched against, so the section never reaches the
+        // output and its text is filed under the section before it.
+        // Three pages of body text so that the area, which is the median of the pages'
+        // bounds, is the body's own box rather than whatever one page happens to hold.
+        let mut pages: Vec<Page> = Vec::new();
+        for page_number in 1..=3 {
+            let mut page = Page::new(595.0, 842.0, page_number);
+            for y in [100.0, 200.0, 300.0, 400.0, 500.0] {
+                let mut block = Block::new(100.0, y, 400.0, 20.0);
+                let mut line = Line::new(100.0, y, 400.0, 20.0);
+                for word in
+                    "a paragraph of body text that fills the measured area".split_whitespace()
+                {
+                    line.add_word(word.to_string(), 100.0, y, 20.0, 10.0);
+                }
+                block.lines.push(line);
+                page.blocks.push(block);
+            }
+            pages.push(page);
+        }
+        // The heading, down in the margin where the text area does not reach.
+        let mut heading = Block::new(5.0, 810.0, 60.0, 12.0);
+        let mut line = Line::new(5.0, 810.0, 60.0, 12.0);
+        for word in "Related Work".split_whitespace() {
+            line.add_word(word.to_string(), 5.0, 810.0, 20.0, 10.0);
+        }
+        heading.lines.push(line);
+        pages[0].blocks.push(heading);
+
+        let mut config = ParserConfig::new();
+        config.sections.push((1, "Related Work".to_string()));
+        parse_extract_textarea(&mut config, &mut pages).unwrap();
+
+        let kept: Vec<String> =
+            pages[0].blocks.iter().map(|b| b.get_text().trim().to_string()).collect();
+        assert!(
+            kept.iter().any(|t| t == "Related Work"),
+            "the heading must survive the text-area filter, got {:?}",
+            kept
+        );
+        assert!(
+            !config.dropped_texts.iter().any(|d| d.text.contains("Related Work")),
+            "and must not be recorded as dropped"
         );
     }
 

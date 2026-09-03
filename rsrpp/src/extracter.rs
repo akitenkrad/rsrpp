@@ -275,6 +275,12 @@ pub fn get_text_area(pages: &Vec<Page>) -> Coordinate {
     };
 }
 
+/// Share of the page width the widest lines must reach for the paper to be read as one
+/// column. Below it the text is set in two. The line falls in the gap the measurement
+/// leaves between the two kinds of paper: 0.46 at the widest two-column paper, 0.65 at
+/// the narrowest single-column one.
+const TWO_COLUMN_WIDTH_SHARE: f32 = 0.55;
+
 pub fn adjst_columns(pages: &mut Vec<Page>, config: &ParserConfig) -> anyhow::Result<()> {
     // Early return if no sections found - column adjustment is not possible
     let last_page = match config.sections.iter().map(|(page_number, _)| page_number).max() {
@@ -291,24 +297,31 @@ pub fn adjst_columns(pages: &mut Vec<Page>, config: &ParserConfig) -> anyhow::Re
         .ok_or_else(|| anyhow::anyhow!("page_width not available in pdf_info"))?
         .parse::<f32>()
         .map_err(|e| anyhow::anyhow!("Invalid page_width: {}", e))?;
-    let avg_line_width = pages
+    // How wide the paper sets its text, read off the lines themselves. An average is no
+    // use here: every figure, caption, table cell and last-line-of-paragraph is a short
+    // line, and there are enough of them to pull the mean of any paper below any
+    // threshold — measured over seven arXiv papers the old figure lands between 0.12 and
+    // 0.37 of the page width, single-column and two-column alike, so every paper was
+    // taken for two columns and every page reordered. The ninth decile asks a different
+    // question, "how wide do the widest lines run", and separates them cleanly: 0.65,
+    // 0.65 and 0.77 for the three single-column papers against 0.37, 0.37, 0.39 and 0.46
+    // for the four two-column ones.
+    let mut line_widths: Vec<f32> = pages
         .iter()
         .filter(|page| page.page_number <= last_page)
-        .map(|page| {
-            page.blocks
-                .iter()
-                .map(|block| {
-                    block.lines.iter().map(|line| line.width).sum::<f32>()
-                        / block.lines.len() as f32
-                })
-                .sum::<f32>()
-                / page.blocks.len() as f32
-        })
-        .sum::<f32>()
-        / pages.len() as f32;
+        .flat_map(|page| page.blocks.iter())
+        .flat_map(|block| block.lines.iter())
+        .map(|line| line.width)
+        .collect();
+    if line_widths.is_empty() {
+        tracing::warn!("No lines to measure, skipping column adjustment");
+        return Ok(());
+    }
+    line_widths.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let widest = line_widths[line_widths.len() * 9 / 10];
 
     let half_width = page_width / 2.2;
-    if avg_line_width < page_width / 1.5 {
+    if widest < page_width * TWO_COLUMN_WIDTH_SHARE {
         for page in pages.iter_mut() {
             page.number_of_columns = 2;
             let mut right_blocks: Vec<Block> = Vec::new();
@@ -322,6 +335,15 @@ pub fn adjst_columns(pages: &mut Vec<Page>, config: &ParserConfig) -> anyhow::Re
             }
             left_blocks.append(&mut right_blocks);
             page.blocks = left_blocks;
+        }
+    } else {
+        // One column, so reading order is top to bottom. Poppler does not always report
+        // it that way: on page 1 of arXiv 2507.02259 the centred "ABSTRACT" heading comes
+        // after the paragraph it heads, which files the abstract under whatever section
+        // was open before it. Sorting is stable, so blocks that share a top keep the
+        // order poppler gave them.
+        for page in pages.iter_mut() {
+            page.blocks.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal));
         }
     }
     Ok(())
@@ -413,6 +435,94 @@ mod tests {
         assert!(!b.is_intercept(&d));
         assert!(!b.is_intercept(&e));
         assert!(!b.is_intercept(&f));
+    }
+
+    fn page_with_blocks(width: f32, blocks: &[(f32, f32, f32)]) -> crate::models::Page {
+        // Each entry is (x, y, line width).
+        let mut page = crate::models::Page::new(width, 792.0, 1);
+        for (x, y, line_width) in blocks {
+            let mut block = crate::models::Block::new(*x, *y, *line_width, 12.0);
+            let mut line = crate::models::Line::new(*x, *y, *line_width, 12.0);
+            line.add_word("text".to_string(), *x, *y, *line_width, 10.0);
+            block.lines.push(line);
+            page.blocks.push(block);
+        }
+        page
+    }
+
+    fn config_for_columns() -> ParserConfig {
+        let mut config = ParserConfig::new();
+        config.sections.push((1, "Introduction".to_string()));
+        config.pdf_info.insert("page_width".to_string(), "612".to_string());
+        config
+    }
+
+    #[test]
+    fn test_adjst_columns_reads_a_single_column_paper_as_one_column() {
+        // Every figure, caption and table cell is a short line, so the mean line width of
+        // a single-column paper sits as low as a two-column one's. Judged by the mean,
+        // every paper was taken for two columns and every page reordered.
+        let mut blocks = vec![
+            (108.0, 100.0, 500.0),
+            (108.0, 200.0, 500.0),
+            (108.0, 300.0, 490.0),
+            (280.0, 400.0, 60.0),
+            (108.0, 500.0, 500.0),
+        ];
+        // The short lines a page really carries: axis labels, table cells, caption tails.
+        for i in 0..8 {
+            blocks.push((150.0 + i as f32 * 10.0, 550.0 + i as f32 * 15.0, 60.0));
+        }
+        let mut pages = vec![page_with_blocks(612.0, &blocks)];
+
+        adjst_columns(&mut pages, &config_for_columns()).unwrap();
+
+        assert_eq!(pages[0].number_of_columns, 1);
+        // And the centred short block stays where the page put it, rather than being
+        // sorted to the end as a right-hand column.
+        let tops: Vec<f32> = pages[0].blocks.iter().take(5).map(|b| b.y).collect();
+        assert_eq!(tops, vec![100.0, 200.0, 300.0, 400.0, 500.0]);
+    }
+
+    #[test]
+    fn test_adjst_columns_still_reads_a_two_column_paper_as_two() {
+        let mut pages = vec![page_with_blocks(
+            612.0,
+            &[
+                (71.0, 100.0, 220.0),
+                (306.0, 120.0, 220.0),
+                (71.0, 300.0, 220.0),
+                (306.0, 320.0, 215.0),
+            ],
+        )];
+
+        adjst_columns(&mut pages, &config_for_columns()).unwrap();
+
+        assert_eq!(pages[0].number_of_columns, 2);
+        // Left column first, then right.
+        let lefts: Vec<f32> = pages[0].blocks.iter().map(|b| b.x).collect();
+        assert_eq!(lefts, vec![71.0, 71.0, 306.0, 306.0]);
+    }
+
+    #[test]
+    fn test_adjst_columns_puts_a_single_column_page_in_reading_order() {
+        // Poppler does not always report blocks top to bottom: on page 1 of
+        // arXiv 2507.02259 the centred "ABSTRACT" heading comes after the paragraph it
+        // heads, which files the abstract under whatever section was open before it.
+        let mut pages = vec![page_with_blocks(
+            612.0,
+            &[
+                (108.0, 100.0, 500.0),
+                (108.0, 400.0, 500.0),
+                (108.0, 200.0, 500.0),
+                (108.0, 300.0, 500.0),
+            ],
+        )];
+
+        adjst_columns(&mut pages, &config_for_columns()).unwrap();
+
+        let tops: Vec<f32> = pages[0].blocks.iter().map(|b| b.y).collect();
+        assert_eq!(tops, vec![100.0, 200.0, 300.0, 400.0]);
     }
 
     #[tokio::test]
