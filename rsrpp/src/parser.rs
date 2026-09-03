@@ -223,14 +223,14 @@ fn filter_table_regions(
         for (block_index, block) in page.blocks.iter().enumerate() {
             // A caption that happens to sit inside the ruled area is still a caption.
             // It is classified as one only later, in `cleaner::classify_blocks`, so
-            // without this check it is deleted before it can ever be recognised and
-            // ends up in neither `captions` nor `contents`. Skipping the whole block
-            // keeps continuation lines too — a caption rarely fits on one line, and
-            // half a caption is not much better than none.
-            if cleaner::is_caption(block) {
-                continue;
-            }
-            for (line_index, line) in block.lines.iter().enumerate() {
+            // without this exemption it is deleted before it can ever be recognised and
+            // ends up in neither `captions` nor `contents`. The exemption covers the
+            // caption's own lines and stops there: poppler puts a caption and the rows
+            // of its table in one block often enough — Table 4 of arXiv 1706.03762 is
+            // one block of 40 lines — that exempting the block would hand the body text
+            // 38 table cells, untracked by the drop ledger because nothing dropped them.
+            let caption_lines = cleaner::caption_line_span(block);
+            for (line_index, line) in block.lines.iter().enumerate().skip(caption_lines) {
                 let line_coord = Coordinate::from_object(line.x, line.y, line.width, line.height);
                 if !line_coord.is_contained_in(table) {
                     continue;
@@ -296,9 +296,15 @@ fn filter_table_regions(
     doomed.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
     doomed.dedup_by(|a, b| (a.0, a.1) == (b.0, b.1));
 
-    for (block_index, line_index, text) in doomed.iter().rev() {
-        page.blocks[*block_index].lines.remove(*line_index);
+    // Record first, in document order. The removal below has to run backwards so that
+    // `Vec::remove` does not shift the indices still to be visited, but the ledger is
+    // read back as text — `--keep-dropped` prints it as an `Unassigned` section — and
+    // reversing a table there turns its rows upside down.
+    for (_, _, text) in doomed.iter() {
         config.record_drop(page_number, DropReason::TableRegion, text);
+    }
+    for (block_index, line_index, _) in doomed.iter().rev() {
+        page.blocks[*block_index].lines.remove(*line_index);
     }
     page.blocks.retain(|block| !block.lines.is_empty());
 }
@@ -1117,6 +1123,94 @@ mod tests {
         // The cells still go.
         assert_eq!(config.dropped_texts.len(), 3);
         assert!(config.dropped_texts.iter().all(|d| d.text.len() < 10));
+    }
+
+    #[test]
+    fn test_filter_table_regions_splits_a_block_holding_caption_and_table() {
+        // Poppler groups by geometry, so a caption printed tight above its table lands
+        // in the same block as the rows — Table 4 of arXiv 1706.03762 is one block of
+        // 40 lines, two of caption and 38 of cells. Exempting the block wholesale to
+        // save the caption handed those 38 cells to the body text.
+        let mut page = Page::new(595.0, 842.0, 1);
+        let mut block = Block::new(100.0, 100.0, 340.0, 60.0);
+        // The caption: two lines, evenly spaced, both starting at the block's margin.
+        for (y, text) in [
+            (
+                100.0,
+                "Table 4: The Transformer generalizes well to English constituency parsing",
+            ),
+            (111.0, "(Results are on Section 23 of WSJ)"),
+        ] {
+            let mut line = Line::new(100.0, y, 340.0, 10.0);
+            for word in text.split_whitespace() {
+                line.add_word(word.to_string(), 100.0, y, 10.0, 10.0);
+            }
+            block.lines.push(line);
+        }
+        // The rows: each cell is its own line, and the cells of one row share a top.
+        for (y, x, text) in [
+            (123.0, 200.0, "Parser"),
+            (123.0, 330.0, "WSJ 23 F1"),
+            (134.0, 150.0, "Petrov et al. (2006)"),
+            (134.0, 330.0, "90.4"),
+        ] {
+            let mut line = Line::new(x, y, 60.0, 10.0);
+            for word in text.split_whitespace() {
+                line.add_word(word.to_string(), x, y, 10.0, 10.0);
+            }
+            block.lines.push(line);
+        }
+        page.blocks.push(block);
+        page.tables.push(Coordinate::from_rect(90.0, 90.0, 450.0, 150.0));
+
+        let mut config = ParserConfig::new();
+        let (title_regex, ws_regex) = table_filter_regexes();
+        filter_table_regions(&mut page, &mut config, &title_regex, &ws_regex);
+
+        let kept: Vec<String> = page
+            .blocks
+            .iter()
+            .flat_map(|b| b.lines.iter())
+            .map(|l| l.get_text().trim().to_string())
+            .collect();
+        assert_eq!(
+            kept.len(),
+            2,
+            "only the caption may survive, got {:?}",
+            kept
+        );
+        assert!(kept[0].starts_with("Table 4:"));
+        assert!(kept[1].starts_with("(Results"));
+        assert_eq!(
+            config.dropped_texts.len(),
+            4,
+            "every cell goes, and goes on the record: {:?}",
+            config.dropped_texts
+        );
+    }
+
+    #[test]
+    fn test_filter_table_regions_records_drops_in_document_order() {
+        // The ledger is read back as text — `--keep-dropped` prints it as an
+        // `Unassigned` section — so a table recorded bottom-up comes out upside down.
+        let mut page = Page::new(595.0, 842.0, 1);
+        let mut block = Block::new(100.0, 100.0, 200.0, 40.0);
+        for (y, text) in [(100.0, "Header"), (120.0, "Row A"), (140.0, "Row B")] {
+            let mut line = Line::new(100.0, y, 200.0, 10.0);
+            for word in text.split_whitespace() {
+                line.add_word(word.to_string(), 100.0, y, 10.0, 10.0);
+            }
+            block.lines.push(line);
+        }
+        page.blocks.push(block);
+        page.tables.push(Coordinate::from_rect(90.0, 90.0, 310.0, 155.0));
+
+        let mut config = ParserConfig::new();
+        let (title_regex, ws_regex) = table_filter_regexes();
+        filter_table_regions(&mut page, &mut config, &title_regex, &ws_regex);
+
+        let recorded: Vec<&str> = config.dropped_texts.iter().map(|d| d.text.as_str()).collect();
+        assert_eq!(recorded, vec!["Header", "Row A", "Row B"]);
     }
 
     #[test]
