@@ -65,6 +65,56 @@ impl PopplerLimits {
     }
 }
 
+/// Which ceiling a poppler invocation was stopped for exceeding.
+///
+/// The distinction is the one a caller acts on: a document that runs out of time is
+/// merely enormous, while one that runs out of file or byte budget is making poppler
+/// write without bound. Both mean "give up on this document", which is why they are
+/// variants of one error rather than separate error types.
+///
+/// `#[non_exhaustive]`: a fourth ceiling would otherwise break every `match` downstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PopplerLimit {
+    /// The wall-clock limit (`ParserConfig::poppler_timeout`).
+    Time,
+    /// The file-count budget (`ParserConfig::poppler_max_files_per_page`).
+    Files,
+    /// The byte budget (`ParserConfig::poppler_max_bytes_per_page`).
+    Bytes,
+}
+
+/// A poppler process was killed for exceeding one of [`PopplerLimits`].
+///
+/// Carried by the [`anyhow::Error`] the parse fails with, so a caller can tell this
+/// failure from every other one with `err.downcast_ref::<PopplerLimitError>()` instead
+/// of matching on the message text. The `Display` text is unchanged from what the error
+/// said before the type existed, so logs read the same.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PopplerLimitError {
+    limit: PopplerLimit,
+    message: String,
+}
+
+impl PopplerLimitError {
+    fn new(limit: PopplerLimit, message: String) -> Self {
+        PopplerLimitError { limit, message }
+    }
+
+    /// Which ceiling was exceeded.
+    pub fn limit(&self) -> PopplerLimit {
+        self.limit
+    }
+}
+
+impl std::fmt::Display for PopplerLimitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for PopplerLimitError {}
+
 /// What the watchdog found when it decided to stop a process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LimitBreach {
@@ -180,33 +230,42 @@ fn run_poppler(
     let stderr = stderr_reader.join().unwrap_or_default();
 
     if timed_out {
-        return Err(Error::msg(format!(
-            "{} exceeded the time limit of {}s and was killed (poppler_timeout)",
-            program,
-            limits.timeout.as_secs()
+        return Err(Error::new(PopplerLimitError::new(
+            PopplerLimit::Time,
+            format!(
+                "{} exceeded the time limit of {}s and was killed (poppler_timeout)",
+                program,
+                limits.timeout.as_secs()
+            ),
         )));
     }
     match breach {
         Some(LimitBreach::Files(files)) => {
-            return Err(Error::msg(format!(
-                "{} exceeded the output limit of {} files and was killed \
-                 (poppler_max_files_per_page); {} left at least {} files in {}",
-                program,
-                limits.max_files,
-                program,
-                files,
-                watch_dir.display()
+            return Err(Error::new(PopplerLimitError::new(
+                PopplerLimit::Files,
+                format!(
+                    "{} exceeded the output limit of {} files and was killed \
+                     (poppler_max_files_per_page); {} left at least {} files in {}",
+                    program,
+                    limits.max_files,
+                    program,
+                    files,
+                    watch_dir.display()
+                ),
             )));
         }
         Some(LimitBreach::Bytes(bytes)) => {
-            return Err(Error::msg(format!(
-                "{} exceeded the output limit of {} bytes and was killed \
-                 (poppler_max_bytes_per_page); {} left at least {} bytes in {}",
-                program,
-                limits.max_bytes,
-                program,
-                bytes,
-                watch_dir.display()
+            return Err(Error::new(PopplerLimitError::new(
+                PopplerLimit::Bytes,
+                format!(
+                    "{} exceeded the output limit of {} bytes and was killed \
+                     (poppler_max_bytes_per_page); {} left at least {} bytes in {}",
+                    program,
+                    limits.max_bytes,
+                    program,
+                    bytes,
+                    watch_dir.display()
+                ),
             )));
         }
         None => {}
@@ -1387,6 +1446,11 @@ mod tests {
             !message.contains("output limit"),
             "a timeout must not be reported as a runaway, got: {message}"
         );
+        assert_eq!(
+            err.downcast_ref::<PopplerLimitError>().map(PopplerLimitError::limit),
+            Some(PopplerLimit::Time),
+            "a caller must be able to tell this apart without reading the message"
+        );
         assert!(
             started.elapsed() < Duration::from_secs(10),
             "the process must be killed, not waited for"
@@ -1416,6 +1480,11 @@ mod tests {
             !message.contains("time limit"),
             "a runaway must not be reported as a timeout, got: {message}"
         );
+        assert_eq!(
+            err.downcast_ref::<PopplerLimitError>().map(PopplerLimitError::limit),
+            Some(PopplerLimit::Files),
+            "a caller must be able to tell this apart without reading the message"
+        );
         assert!(
             started.elapsed() < Duration::from_secs(30),
             "the watchdog must stop it long before its time limit"
@@ -1439,6 +1508,11 @@ mod tests {
         assert!(
             message.contains("exceeded the output limit of 4096 bytes"),
             "the error must name the byte limit, got: {message}"
+        );
+        assert_eq!(
+            err.downcast_ref::<PopplerLimitError>().map(PopplerLimitError::limit),
+            Some(PopplerLimit::Bytes),
+            "a caller must be able to tell this apart without reading the message"
         );
     }
 
