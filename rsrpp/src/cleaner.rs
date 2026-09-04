@@ -7,7 +7,7 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use crate::models::{Block, BlockType, Line, Page};
+use crate::models::{Block, BlockType, Page};
 
 /// Pre-compiled regex patterns for caption detection.
 /// Matches patterns like:

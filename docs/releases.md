@@ -3,6 +3,56 @@
 # Release history
 
 <details open>
+<summary>2.0.0</summary>
+
+**Breaking changes.** Two of them, both about behaviour rather than signatures.
+
+- **Temporary files now live and die with the config.** A parse works in a directory of
+  its own and removes it when the last handle to the `ParserConfig` goes away — on the
+  normal path, on an early return, and while a panic unwinds. Previously nothing was
+  removed at all: `clean_files()` existed but only the tests called it, and it could not
+  have finished the job anyway, since `pdftohtml -c` keeps writing images after the
+  figure paths have been collected. **A path copied out of `config.pdf_figures` no
+  longer outlives the config**; copy the file out while the config is alive.
+- **The CLI no longer exits by panicking.** Every failure used to be an `unwrap`, so a
+  broken PDF, an unwritable output path and a document poppler cannot finish all ended
+  the same way: exit code 101 and a backtrace. The exit code now says which: `0` written,
+  `1` input or environment, `2` command line, `3` poppler stopped at a limit. Scripts
+  that tested for 101 need updating.
+
+**Poppler is now held to limits.** Some PDFs make it write without bound — a figure
+painted with tiling patterns one and four points wide has `pdftohtml` emit a PNG per
+tile, which measured 1,079,890 files and 7.4 GB from a single parse that never returned.
+Every poppler call is watched and killed if it passes either a time limit or an output
+limit; both are needed, because a 1,000-page scan is slow for an honest reason and has
+to be told apart from a document that will never finish. Budgets are per page, with a
+floor for short documents: `DEFAULT_POPPLER_TIMEOUT` (900s),
+`DEFAULT_POPPLER_MAX_FILES_PER_PAGE` (200), `DEFAULT_POPPLER_MAX_BYTES_PER_PAGE`
+(10 MiB), all settable on `ParserConfig`. A breach comes back as
+`converter::PopplerLimitError`, so callers can recognise it by type rather than by
+matching on the message.
+
+**Abandoned working directories are reclaimed.** `SIGKILL` runs no destructor, so a
+killed run leaves its directory behind and poppler may outlive its parent and keep
+writing into it. Each process sweeps once, on its first `ParserConfig::new()`, and takes
+only directories whose owning process is provably gone, so parses running side by side
+never take each other's files.
+
+**Section detection, measured over 2,812 papers.** The changes that went in over the
+preceding days — the placement pass that judges a heading candidate by where it sits, the
+caption and table-region rules, per-page column detection — were verified against the
+whole corpus rather than a sample. No body text is lost: with `--keep-dropped` the output
+is byte-for-byte what poppler read, and across the corpus the net change is +4,830
+characters. Sub-headings set at a different indent from their ALL CAPS parents are folded
+into the parent section; the text is preserved, the structure is coarser.
+
+**Documentation.** The README is now a front page, with the detail in `docs/` in English
+and Japanese. The library example there had been importing from `rsrpp::parser::structs`,
+which does not exist.
+
+</details>
+
+<details>
 <summary>1.0.25</summary>
 
 - LLM-enhanced processing is now enabled by default (`ParserConfig::new()` sets `use_llm: true`)

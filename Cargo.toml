@@ -5,8 +5,8 @@ members = ["rsrpp", "rsrpp-cli"]
 [workspace.package]
 authors = ["akitenkrad"]
 edition = "2021"
-version = "1.0.25"
-description = "A Rust project for research paper pdf."
+version = "2.0.0"
+description = "Parse research paper PDFs into structured sections."
 repository = "https://github.com/akitenkrad/rsrpp.git"
 license = "MIT"
 

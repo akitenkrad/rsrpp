@@ -3,9 +3,14 @@ name = "rsrpp"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description.workspace = true
 repository.workspace = true
 license.workspace = true
+description = "Parse research paper PDFs into structured sections: body text, captions, math and references."
+homepage = "https://github.com/akitenkrad/rsrpp"
+documentation = "https://docs.rs/rsrpp"
+readme = "README.md"
+keywords = ["pdf", "parser", "research", "paper", "poppler"]
+categories = ["parser-implementations", "text-processing", "science"]
 
 [dependencies]
 anyhow = { workspace = true }
