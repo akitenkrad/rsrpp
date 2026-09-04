@@ -22,3 +22,11 @@ Cargo.lock
 /.claude
 /thoughts
 /CLAUDE.md
+
+# A/B harness inputs and outputs: paper lists and per-run result directories are
+# generated on the machine that runs them. See tools/ab-harness/README.md.
+/tools/ab-harness/*.txt
+/tools/ab-harness/*.json
+/tools/ab-harness/bbox/
+/tools/ab-harness/out*/
+/tools/ab-harness/__pycache__/
