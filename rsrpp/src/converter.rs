@@ -1381,6 +1381,156 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_sections_stands_down_one_candidate_short() {
+        // Four candidates — the last count at which the pass leaves the document alone.
+        // The label sits where no column margin or centre is, so the pass would reject it
+        // if it ran; that it survives is what says the pass stood down.
+        let xml = xml_with_pages(&[format!(
+            concat!(
+                "<text top=\"60\" left=\"72\" width=\"50\" height=\"12\" font=\"1\">Abstract</text>\n",
+                "{}\n",
+                "<text top=\"200\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Introduction</text>\n",
+                "<text top=\"320\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Experiments</text>\n",
+                "<text top=\"400\" left=\"380\" width=\"60\" height=\"12\" font=\"1\">NIAH-Level 1</text>"
+            ),
+            body_column(80.0)
+        )
+        .as_str()]);
+
+        let mut config = ParserConfig::new();
+        detect_sections(&mut config, &xml, false, std::time::Instant::now()).unwrap();
+
+        let titles: Vec<&str> = config.sections.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(titles.len(), 4, "four candidates is the boundary, got {:?}", titles);
+        assert!(
+            titles.contains(&"NIAH-Level 1"),
+            "one candidate short of the threshold, the pass must not run, got {:?}",
+            titles
+        );
+    }
+
+    #[test]
+    fn test_detect_sections_judges_a_document_at_the_threshold() {
+        // Five candidates — the first count at which the pass runs, and the same figure
+        // label is now removed. Six is covered by
+        // `test_detect_sections_rejects_a_label_inside_a_figure`.
+        let xml = xml_with_pages(&[format!(
+            concat!(
+                "<text top=\"60\" left=\"72\" width=\"50\" height=\"12\" font=\"1\">Abstract</text>\n",
+                "{}\n",
+                "<text top=\"200\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Introduction</text>\n",
+                "<text top=\"260\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Related Work</text>\n",
+                "<text top=\"320\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Experiments</text>\n",
+                "<text top=\"400\" left=\"380\" width=\"60\" height=\"12\" font=\"1\">NIAH-Level 1</text>"
+            ),
+            body_column(80.0)
+        )
+        .as_str()]);
+
+        let mut config = ParserConfig::new();
+        detect_sections(&mut config, &xml, false, std::time::Instant::now()).unwrap();
+
+        let titles: Vec<&str> = config.sections.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(titles.contains(&"Experiments"), "got {:?}", titles);
+        assert!(
+            !titles.contains(&"NIAH-Level 1"),
+            "at five candidates the pass runs, got {:?}",
+            titles
+        );
+    }
+
+    #[test]
+    fn test_detect_sections_removes_two_of_five_candidates() {
+        // Two rejections out of five: still a minority, so the verdicts stand and both
+        // labels go.
+        let xml = xml_with_pages(&[format!(
+            concat!(
+                "<text top=\"60\" left=\"72\" width=\"50\" height=\"12\" font=\"1\">Abstract</text>\n",
+                "{}\n",
+                "<text top=\"200\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Introduction</text>\n",
+                "<text top=\"320\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Experiments</text>\n",
+                "<text top=\"400\" left=\"380\" width=\"60\" height=\"12\" font=\"1\">NIAH-Level 1</text>\n",
+                "<text top=\"430\" left=\"404\" width=\"60\" height=\"12\" font=\"1\">NIAH-Level 2</text>"
+            ),
+            body_column(80.0)
+        )
+        .as_str()]);
+
+        let mut config = ParserConfig::new();
+        detect_sections(&mut config, &xml, false, std::time::Instant::now()).unwrap();
+
+        let titles: Vec<&str> = config.sections.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(titles.contains(&"Experiments"), "got {:?}", titles);
+        assert!(
+            !titles.contains(&"NIAH-Level 1") && !titles.contains(&"NIAH-Level 2"),
+            "two of five is a minority, so both labels go, got {:?}",
+            titles
+        );
+    }
+
+    #[test]
+    fn test_detect_sections_stands_down_when_it_would_reject_three_of_five() {
+        // Three rejections out of five is no longer a minority. The rule and the document
+        // disagree about the layout, and the document is the authority, so every candidate
+        // is kept — including the labels the pass would have removed one fewer ago.
+        let xml = xml_with_pages(&[format!(
+            concat!(
+                "<text top=\"60\" left=\"72\" width=\"50\" height=\"12\" font=\"1\">Abstract</text>\n",
+                "{}\n",
+                "<text top=\"200\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Introduction</text>\n",
+                "<text top=\"400\" left=\"380\" width=\"60\" height=\"12\" font=\"1\">NIAH-Level 1</text>\n",
+                "<text top=\"430\" left=\"404\" width=\"60\" height=\"12\" font=\"1\">NIAH-Level 2</text>\n",
+                "<text top=\"460\" left=\"428\" width=\"60\" height=\"12\" font=\"1\">NIAH-Level 3</text>"
+            ),
+            body_column(80.0)
+        )
+        .as_str()]);
+
+        let mut config = ParserConfig::new();
+        detect_sections(&mut config, &xml, false, std::time::Instant::now()).unwrap();
+
+        let titles: Vec<&str> = config.sections.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(titles.len(), 5, "nothing may be dropped, got {:?}", titles);
+        assert!(
+            titles.contains(&"NIAH-Level 3"),
+            "rejecting the majority means the pass does not describe this layout, got {:?}",
+            titles
+        );
+    }
+
+
+    #[test]
+    fn test_detect_sections_stands_down_on_an_even_split() {
+        // Three of six is exactly half, not a majority, and the pass stands down here too:
+        // half the candidates disagreeing with the rule is already the document telling us
+        // the rule has the layout wrong. This is the case that separates `<` from `<=`.
+        let xml = xml_with_pages(&[format!(
+            concat!(
+                "<text top=\"60\" left=\"72\" width=\"50\" height=\"12\" font=\"1\">Abstract</text>\n",
+                "{}\n",
+                "<text top=\"200\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Introduction</text>\n",
+                "<text top=\"320\" left=\"72\" width=\"90\" height=\"12\" font=\"1\">Experiments</text>\n",
+                "<text top=\"400\" left=\"380\" width=\"60\" height=\"12\" font=\"1\">NIAH-Level 1</text>\n",
+                "<text top=\"430\" left=\"404\" width=\"60\" height=\"12\" font=\"1\">NIAH-Level 2</text>\n",
+                "<text top=\"460\" left=\"428\" width=\"60\" height=\"12\" font=\"1\">NIAH-Level 3</text>"
+            ),
+            body_column(80.0)
+        )
+        .as_str()]);
+
+        let mut config = ParserConfig::new();
+        detect_sections(&mut config, &xml, false, std::time::Instant::now()).unwrap();
+
+        let titles: Vec<&str> = config.sections.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(titles.len(), 6, "an even split drops nothing, got {:?}", titles);
+        assert!(
+            titles.contains(&"NIAH-Level 3"),
+            "half is not a majority, so the pass stands down, got {:?}",
+            titles
+        );
+    }
+
+    #[test]
     fn test_detect_columns_merges_a_margin_split_across_bins() {
         // One margin reaches poppler as a few left edges a point or two apart. Counting
         // the bins separately can leave each under the threshold while their sum clears
