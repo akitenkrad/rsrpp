@@ -8,6 +8,8 @@
 
 # Rust Research Paper Parser (RSRPP)
 
+<img src="LOGO.png" alt="RSRPP Logo" width="150" height="150" align="right"/>
+
 RSRPP turns a research paper PDF into structured sections. It drives poppler for the
 text and its geometry, works out the column layout and which lines are section
 headings, and emits JSON in which every section carries its body text, its figure and

@@ -8,6 +8,8 @@
 
 # Rust Research Paper Parser (RSRPP)
 
+<img src="LOGO.png" alt="RSRPP Logo" width="150" height="150" align="right"/>
+
 RSRPP は研究論文の PDF を構造化された節の集合に変換する．poppler を駆動してテキストと
 その座標を取り出し，段組みのレイアウトと，どの行が節見出しなのかを判定して，各節が本文・
 図表のキャプション・数式，そして必要なら参考文献を持つ JSON を出力する．Rust のライブラリ
