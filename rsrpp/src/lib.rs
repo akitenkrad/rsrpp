@@ -83,6 +83,51 @@
 //! // output.references - Vec<Reference> with authors, title, year, venue, etc.
 //! ```
 //!
+//! ## Temporary files
+//!
+//! A parse works in a directory of its own under the system temp directory, and
+//! everything it produced is removed when the last handle to the [`config::ParserConfig`]
+//! goes away — on the normal path, on an early return, and while a panic unwinds.
+//! [`config::ParserConfig::clean_files`] removes the same directory; calling it is
+//! optional, and calling it twice is not an error.
+//!
+//! Two consequences are worth knowing. A path copied out of `config.pdf_figures` does
+//! not outlive the config: read the file while the config is alive. And a process
+//! killed with `SIGKILL` runs no destructor, so it leaves its directory behind; the
+//! next parse reclaims what earlier runs abandoned, taking only directories whose
+//! owning process is provably gone, so parses running side by side never take each
+//! other's files. [`tempdir_sweep::sweep_abandoned_temp_dirs`] triggers that directly.
+//!
+//! ## Limits on poppler
+//!
+//! Some PDFs make poppler write without bound — a figure painted with a one-point
+//! tiling pattern has `pdftohtml` emit a PNG per tile, which is millions of files and
+//! gigabytes from a single parse. Every poppler invocation is watched and killed if it
+//! passes either a time limit or an output limit; both are needed, because a very long
+//! scanned document is slow for an honest reason and has to be told apart from one that
+//! will never finish. The budgets are per page of the document, with a floor for short
+//! ones:
+//!
+//! - [`config::DEFAULT_POPPLER_TIMEOUT`] (900s)
+//! - [`config::DEFAULT_POPPLER_MAX_FILES_PER_PAGE`] (200)
+//! - [`config::DEFAULT_POPPLER_MAX_BYTES_PER_PAGE`] (10 MiB)
+//!
+//! A breach is reported as [`converter::PopplerLimitError`], so a caller can recognise
+//! it by type rather than by matching on the message:
+//!
+//! ```rust,ignore
+//! use rsrpp::converter::{PopplerLimit, PopplerLimitError};
+//!
+//! match parse(url, &mut config, false).await {
+//!     Ok(pages) => { /* ... */ }
+//!     Err(e) => match e.downcast_ref::<PopplerLimitError>().map(|e| e.limit()) {
+//!         Some(PopplerLimit::Time) => eprintln!("too slow to finish"),
+//!         Some(_) => eprintln!("writes without bound"),
+//!         None => eprintln!("parsing error: {}", e),
+//!     },
+//! }
+//! ```
+//!
 //! ## Tests
 //!
 //! The library includes a set of tests to ensure its functionality. To run the tests, use the following command:
