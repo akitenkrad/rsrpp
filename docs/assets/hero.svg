@@ -1,0 +1,103 @@
+<!--
+  RSRPP repo hero (derived from repo-doc-format skill template).
+  Motif: PDF page -> poppler (text runs + coordinates) -> column/heading
+  detection -> sections as JSON, four stages left to right.
+-->
+<svg width="100%" viewBox="0 0 900 280" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>RSRPP — Rust Research Paper Parser</title>
+<desc>Pipeline: a PDF page is read by poppler into text runs with coordinates, the columns and section headings are detected, and each section is emitted as structured JSON.</desc>
+<style>
+  .ts    { font-family: -apple-system, "Helvetica Neue", "Hiragino Sans", sans-serif; font-size: 13px; fill: #444441; }
+  .tl    { font-family: -apple-system, "Helvetica Neue", "Hiragino Sans", sans-serif; font-size: 12px; font-weight: 600; fill: #534AB7; letter-spacing: 2px; }
+  .title { font-family: -apple-system, "Helvetica Neue", "Hiragino Sans", sans-serif; font-size: 27px; font-weight: 600; fill: #2C2C2A; }
+  .glab  { font-family: -apple-system, "Helvetica Neue", "Hiragino Sans", sans-serif; font-size: 11px; font-weight: 600; fill: #888780; letter-spacing: 0.5px; }
+  .gray-fill   { fill: #F1EFE8; stroke: #C7C5BD; stroke-width: 0.6; }
+  .purple-fill { fill: #EEEDFE; stroke: #534AB7; stroke-width: 0.6; }
+  .teal-fill   { fill: #E1F5EE; stroke: #0F6E56; stroke-width: 0.6; }
+  .arrd { stroke: #534AB7; stroke-width: 1.6; fill: none; }
+  .iln  { stroke: #5F5E5A; stroke-width: 2.2; fill: none; }
+  .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 52px; font-weight: 600; fill: #534AB7; }
+  @media (prefers-color-scheme: dark) {
+    .ts    { fill: #C7C5BD; }
+    .tl    { fill: #AFA9EC; }
+    .title { fill: #E5E5E2; }
+    .glab  { fill: #8C8B85; }
+    .gray-fill   { fill: #3A3A37; stroke: #5F5E5A; }
+    .purple-fill { fill: #534AB7; stroke: #AFA9EC; }
+    .teal-fill   { fill: #0F6E56; stroke: #5DCAA5; }
+    .arrd { stroke: #AFA9EC; }
+    .iln  { stroke: #C7C5BD; }
+    .mono { fill: #AFA9EC; }
+  }
+</style>
+<defs>
+<marker id="arrowAccent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+  <path d="M2 1L8 5L2 9" fill="none" stroke="#534AB7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+
+<!-- header -->
+<text class="tl"    x="20" y="28">RUST · PDF PARSER</text>
+<text class="title" x="20" y="60">RSRPP — Rust Research Paper Parser</text>
+<text class="ts"    x="20" y="82">PDF page → poppler extraction → column/heading detection → JSON sections</text>
+
+<!-- pipeline: 4 stages, left to right -->
+
+<!-- stage 1: PDF page -->
+<rect class="gray-fill" x="35" y="104" width="140" height="108" rx="10"/>
+<polygon class="teal-fill" points="157,104 175,104 175,122"/>
+<line class="iln" x1="139" y1="104" x2="157" y2="104"/>
+<line class="iln" x1="157" y1="104" x2="157" y2="122"/>
+<rect class="purple-fill" x="51" y="122" width="90" height="9" rx="2"/>
+<line class="iln" x1="51" y1="146" x2="141" y2="146" stroke-linecap="round"/>
+<line class="iln" x1="51" y1="160" x2="141" y2="160" stroke-linecap="round"/>
+<line class="iln" x1="51" y1="174" x2="113" y2="174" stroke-linecap="round"/>
+<line class="iln" x1="51" y1="188" x2="129" y2="188" stroke-linecap="round"/>
+<text class="glab" x="105" y="232" text-anchor="middle">PDF PAGE</text>
+<text class="ts"   x="105" y="248" text-anchor="middle" style="font-size:11px">text + layout geometry</text>
+
+<path d="M190,158 H250" class="arrd" marker-end="url(#arrowAccent)"/>
+
+<!-- stage 2: poppler — text runs with coordinates -->
+<rect class="gray-fill" x="265" y="104" width="140" height="108" rx="10"/>
+<rect class="teal-fill" x="281" y="120" width="108" height="11" rx="2"/>
+<rect class="teal-fill" x="281" y="137" width="108" height="11" rx="2"/>
+<rect class="teal-fill" x="281" y="154" width="80"  height="11" rx="2"/>
+<rect class="teal-fill" x="281" y="171" width="96"  height="11" rx="2"/>
+<line class="iln" x1="281" y1="192" x2="389" y2="192"/>
+<line class="iln" x1="281" y1="120" x2="281" y2="192"/>
+<circle class="purple-fill" cx="281" cy="192" r="3.5"/>
+<text class="glab" x="335" y="232" text-anchor="middle">POPPLER</text>
+<text class="ts"   x="335" y="248" text-anchor="middle" style="font-size:11px">text runs, x/y coords</text>
+
+<path d="M420,158 H480" class="arrd" marker-end="url(#arrowAccent)"/>
+
+<!-- stage 3: column and heading detection -->
+<rect class="gray-fill" x="495" y="104" width="140" height="108" rx="10"/>
+<rect class="purple-fill" x="511" y="120" width="108" height="10" rx="2"/>
+<line class="iln" x1="565" y1="138" x2="565" y2="196"/>
+<line class="iln" x1="511" y1="146" x2="557" y2="146" stroke-linecap="round"/>
+<line class="iln" x1="511" y1="160" x2="557" y2="160" stroke-linecap="round"/>
+<line class="iln" x1="511" y1="174" x2="545" y2="174" stroke-linecap="round"/>
+<line class="iln" x1="511" y1="188" x2="553" y2="188" stroke-linecap="round"/>
+<line class="iln" x1="573" y1="146" x2="619" y2="146" stroke-linecap="round"/>
+<line class="iln" x1="573" y1="160" x2="619" y2="160" stroke-linecap="round"/>
+<line class="iln" x1="573" y1="174" x2="603" y2="174" stroke-linecap="round"/>
+<text class="glab" x="565" y="232" text-anchor="middle">LAYOUT</text>
+<text class="ts"   x="565" y="248" text-anchor="middle" style="font-size:11px">columns &amp; headings</text>
+
+<path d="M650,158 H710" class="arrd" marker-end="url(#arrowAccent)"/>
+
+<!-- stage 4: sections as JSON -->
+<rect class="gray-fill" x="725" y="104" width="140" height="108" rx="10"/>
+<text class="mono" x="737" y="178">{</text>
+<rect class="teal-fill"   x="768" y="119" width="20" height="8" rx="2"/>
+<rect class="purple-fill" x="792" y="119" width="40" height="8" rx="2"/>
+<rect class="teal-fill"   x="768" y="135" width="20" height="8" rx="2"/>
+<rect class="gray-fill"   x="792" y="135" width="32" height="8" rx="2"/>
+<rect class="teal-fill"   x="768" y="151" width="20" height="8" rx="2"/>
+<rect class="purple-fill" x="792" y="151" width="44" height="8" rx="2"/>
+<text class="mono" x="838" y="178">}</text>
+<text class="glab" x="795" y="232" text-anchor="middle">JSON</text>
+<text class="ts"   x="795" y="248" text-anchor="middle" style="font-size:11px">sections as JSON</text>
+</svg>
