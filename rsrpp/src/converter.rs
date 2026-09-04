@@ -84,7 +84,8 @@ pub enum PopplerLimit {
     Bytes,
 }
 
-/// A poppler process was killed for exceeding one of [`PopplerLimits`].
+/// A poppler process was killed for exceeding one of the limits in [`ParserConfig`]:
+/// the time limit, the file budget or the byte budget. Which one is [`PopplerLimit`].
 ///
 /// Carried by the [`anyhow::Error`] the parse fails with, so a caller can tell this
 /// failure from every other one with `err.downcast_ref::<PopplerLimitError>()` instead
