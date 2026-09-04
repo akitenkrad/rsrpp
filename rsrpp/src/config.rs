@@ -261,6 +261,12 @@ impl ParserConfig {
     ///
     /// A new `ParserConfig` instance with the initialized fields.
     pub fn new() -> ParserConfig {
+        // Working directories are removed on drop, which no `SIGKILL` lets happen. The
+        // leftovers of earlier runs are collected here, at most once per process, so that
+        // every caller of the crate gets the recovery and not only the CLI. It cannot
+        // fail the parse; see `crate::tempdir_sweep`.
+        crate::tempdir_sweep::sweep_abandoned_temp_dirs();
+
         // Unique by construction, not by luck. Two configs alive at once must never
         // share a directory: they delete it in `clean_files` and on drop, so a collision
         // makes one parse quietly remove the other's working files. A random number alone

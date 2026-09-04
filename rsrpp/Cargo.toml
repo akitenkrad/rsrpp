@@ -30,6 +30,11 @@ test-log = { workspace = true }
 openai-tools = { workspace = true }
 base64 = { workspace = true }
 
+# Only for asking whether the pid that owns a leftover temporary directory is still
+# running (`kill(pid, 0)`); see `tempdir_sweep`.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 default = ["table-detection"]
 # OpenCV-backed table region detection. Disable (`--no-default-features`) to build

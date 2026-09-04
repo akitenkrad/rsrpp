@@ -99,4 +99,5 @@ pub mod extracter;
 pub mod llm;
 pub mod models;
 pub mod parser;
+pub mod tempdir_sweep;
 pub mod test_utils;
