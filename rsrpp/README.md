@@ -1,218 +1,76 @@
-# Rust Research Paper Parser (rsrpp)
+# rsrpp — Rust Research Paper Parser
 
-[![CircleCI](https://dl.circleci.com/status-badge/img/circleci/X1fiE4koKU88Z9sKwWoPAH/S2NQ8VZz6F1CZ6vuvFBE3Y/tree/main.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/circleci/X1fiE4koKU88Z9sKwWoPAH/S2NQ8VZz6F1CZ6vuvFBE3Y/tree/main)
 ![Crates.io Version](https://img.shields.io/crates/v/rsrpp?style=flat-square)
+![License: MIT](https://img.shields.io/crates/l/rsrpp?style=flat-square)
 
-## RuSt Research Paper Parser (rsrpp)
+`rsrpp` turns a research paper PDF into structured sections. It drives poppler for the
+text and its geometry, works out the column layout and which lines are section headings,
+and returns sections carrying body text, figure and table captions, math, and optionally
+references.
 
-The `rsrpp` library provides a set of tools for parsing research papers.
-
-<img src="../LOGO.png" alt="LOGO" width="150" height="150"/>
-
-### Quick Start
-
-#### Pre-requirements
-
-- Poppler: `sudo apt install poppler-utils`
-- OpenCV: `sudo apt install libopencv-dev clang libclang-dev`
-
-#### Installation
-
-To start using the `rsrpp` library, add it to your project's dependencies in the `Cargo.toml` file:
+## Requirements
 
 ```bash
-cargo add rsrpp
+sudo apt install poppler-utils libopencv-dev clang libclang-dev   # Ubuntu/Debian
+brew install poppler opencv pkg-config                            # macOS
 ```
 
-Then, import the necessary modules in your code:
+OpenCV 4.x is needed only by the default `table-detection` feature. Building with
+`--no-default-features` removes the OpenCV dependency entirely, at the cost of table
+regions no longer being excluded from the body text.
+
+## Usage
 
 ```rust
-extern crate rsrpp;
-use rsrpp::parser;
+use rsrpp::{config::ParserConfig, models::Section, parser::parse};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut config = ParserConfig::new();
+    let pages = parse("https://arxiv.org/pdf/1706.03762", &mut config, false).await?;
+
+    let sections = Section::from_pages(&pages);
+    println!("{}", serde_json::to_string_pretty(&sections)?);
+    Ok(())
+}
 ```
 
-### Examples
+## What every parse tells you
 
-Here is a simple example of how to use the parser module:
+Text inside a detected table region, and blocks too narrow and short to be body text,
+are excluded on purpose. Nothing is excluded silently: every parse reports its coverage,
+and `ParserConfig::dropped_texts` holds each removed fragment with the page it came from
+and the reason it went.
 
-```rust
-let mut config = ParserConfig::new();
-let url = "https://arxiv.org/pdf/1706.03762";
-let pages = parse(url, &mut config).await.unwrap(); // Vec<Page>
-let sections = Section::from_pages(&pages); // Vec<Section>
-let json = serde_json::to_string(&sections).unwrap(); // String
+```
+Text coverage 93.5% (32142 of 34364 source chars kept). Discarded — narrow block: 210
+fragments / 1142 chars, outside text area: 2 fragments / 62 chars, table region: 142
+fragments / 1018 chars.
 ```
 
-### Tests
+## Temporary files
 
-The library includes a set of tests to ensure its functionality. To run the tests, use the following command:
+A parse works in a directory of its own and removes it when the last handle to the
+config goes away. **A path copied out of `config.pdf_figures` does not outlive the
+config** — read the file while the config is alive. A process killed with `SIGKILL` runs
+no destructor, so the next parse reclaims what earlier runs abandoned.
 
-```sh
-cargo test
-```
+## Limits on poppler
 
-License: MIT
+Some PDFs make poppler write without bound — a figure painted with a one-point tiling
+pattern has `pdftohtml` emit a PNG per tile, which is millions of files from one parse.
+Every poppler call is watched and killed if it passes a time limit or an output limit,
+and a breach comes back as `converter::PopplerLimitError` so callers can recognise it by
+type rather than by matching on a message.
 
-## Releases
+## Documentation
 
-<details open>
-<summary>1.0.25</summary>
+- [Library guide](https://github.com/akitenkrad/rsrpp/blob/main/docs/library.md)
+- [Output format](https://github.com/akitenkrad/rsrpp/blob/main/docs/output.md)
+- [Architecture](https://github.com/akitenkrad/rsrpp/blob/main/docs/architecture.md)
+- [Release history](https://github.com/akitenkrad/rsrpp/blob/main/docs/releases.md)
+- [日本語のドキュメント](https://github.com/akitenkrad/rsrpp/blob/main/README.ja.md)
 
-- LLM-enhanced processing is now enabled by default (`ParserConfig::new()` sets `use_llm: true`)
-  - If `OPENAI_API_KEY` is not set, LLM is automatically disabled at runtime
-  - Use `config.use_llm = false` to explicitly disable
-- Fixed LLM section validation discarding sections from pages the LLM hadn't examined
-  - `merge_sections()` now uses page-range-aware logic
+## License
 
-</details>
-
-<details>
-<summary>1.0.24</summary>
-
-- Fixed body text loss in Nature-format and non-standard papers:
-  - Added section detection fallback for papers without "Abstract" heading using anchor-word matching
-  - Added text area degenerate detection to prevent filtering out all blocks
-  - Capped table detection regions at 50% of page area to reject false positives from chart gridlines
-  - Exempted known section titles from table-region filtering
-- Improved math extraction accuracy:
-  - Fixed critical bug where LLM-extracted math text was discarded; added trigram-based block alignment
-  - Reduced false positives: dates, statistics, section/figure references
-  - Added detection for multi-char math functions, ASCII exponents/subscripts, letter fractions, norm notation
-  - Unified math output to LaTeX format inside `<math>` tags
-  - Added context-based validation for structure-only pattern matches
-
-</details>
-
-<details>
-<summary>1.0.21</summary>
-
-- Fixed panic-causing unwrap() calls with proper error handling.
-
-</details>
-
-<details>
-<summary>1.0.20</summary>
-
-- Fixed Poppler 25.12.0 compatibility on macOS.
-
-</details>
-
-<details>
-<summary>1.0.19</summary>
-
-- Refactored `fix_suffix_hyphens` to support 31 compound word suffixes:
-  - `-based`, `-driven`, `-oriented`, `-aware`, `-agnostic`, `-independent`, `-dependent`, `-first`, `-native`, `-centric`, `-intensive`, `-bound`, `-safe`, `-free`, `-proof`, `-efficient`, `-optimized`, `-enabled`, `-powered`, `-ready`, `-capable`, `-compatible`, `-compliant`, `-level`, `-scale`, `-wide`, `-specific`, `-friendly`, `-facing`, `-like`, `-style`
-- Added unit tests for suffix hyphenation functionality.
-
-</details>
-
-<details>
-<summary>1.0.18</summary>
-
-- updated how to extract section titles from PDF.
-
-</details>
-
-<details>
-<summary>1.0.17</summary>
-
-- restructured `rsrpp.parser`.
-- updated how to extract section titles from PDF.
-- updated tests.
-
-</details>
-
-<details>
-<summary>1.0.16</summary>
-
-- removed `init_logger` form `rsrpp`.
-
-</details>
-
-<details>
-<summary>1.0.15</summary>
-
-- fixed typo.
-- introdeced `tracing` logger.
-
-</details>
-
-<details>
-<summary>1.0.14</summary>
-
-- Updated `rsrpp` version for `rsrpp-cli`.
-
-</details>
-
-<details>
-<summary>1.0.13</summary>
-
-- Updated dependencies.
-- removed build.sh because it requires sudo when installing the crate.
-
-</details>
-
-<details>
-<summary>1.0.12</summary>
-
-- Fixed a bug: remove unused `println!`.
-
-</details>
-
-<details>
-<summary>1.0.11</summary>
-
-- Fixed a bug in xml loop to finish when the file reaches to end.
-
-</details>
-
-<details>
-<summary>1.0.10</summary>
-
-- Added verbose mode.
-- Fixed a bug in the process extracting page number.
-
-</details>
-
-<details>
-<summary>1.0.9</summary>
-
-- Updated: implemented new errors to handle invalid URLs.
-
-</details>
-
-<details>
-<summary>1.0.8</summary>
-
-- Updated: The max retry time for saving PDF files has been increased.
-
-</details>
-
-<details>
-<summary>1.0.7</summary>
-
-- Fix bugs: After converting to PDF, the program now waits until processing is complete.
-
-</details>
-
-<details>
-<summary>1.0.4</summary>
-
-- Fixed bugs in `get_pdf_info`.
-- Made minor improvements.
-
-</details>
-
-<details>
-<summary>1.0.3</summary>
-
-- Added cli -> [rsrpp-cli](https://crates.io/crates/rsrpp-cli).
-
-</details>
-
-<details>
-<summary>1.0.2</summary>
-
-- Updated the `Section` module. `content: String` was replaced by `content: Vec<TextBlock>`.
-
-</details>
+MIT.
