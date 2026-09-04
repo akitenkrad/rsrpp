@@ -1,4 +1,4 @@
-use crate::config::{PageNumber, ParserConfig};
+use crate::config::{PageNumber, ParserConfig, MIN_POPPLER_BYTE_BUDGET, MIN_POPPLER_FILE_BUDGET};
 use anyhow::{Error, Result};
 use glob::glob;
 use indicatif::ProgressBar;
@@ -11,18 +11,230 @@ use std::{
     fs::File,
     io::Read,
     path::Path,
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
     sync::LazyLock,
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+/// How often the watchdog looks at the working directory while a poppler process runs.
+///
+/// The runaway this guards against writes about 40 MB/s, so a fifth of a second lets it
+/// gain ~8 MB past the limit — nothing next to the 7.4 GB it reaches when unwatched.
+/// Making it shorter buys nothing and only re-reads the directory more often.
+const POPPLER_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// The ceiling a single poppler invocation is held to.
+///
+/// Two independent quantities, because they catch different failures: the timeout
+/// catches a process that stops making progress, and the output limits catch one that
+/// makes progress far too fast. Neither substitutes for the other — a 1,008-page scan is
+/// legitimately slow, and a 17-page document that writes a million files is fast.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PopplerLimits {
+    /// Wall-clock limit for one process.
+    pub timeout: Duration,
+    /// Files allowed in the working directory, for the whole document.
+    pub max_files: usize,
+    /// Bytes allowed in the working directory, for the whole document.
+    pub max_bytes: u64,
+}
+
+impl PopplerLimits {
+    /// Scales the per-page settings on `config` by the document's page count.
+    ///
+    /// The page count comes from `pdfinfo`, which `save_pdf` runs before anything that
+    /// writes files, so it is already known by the time it is needed. A document whose
+    /// page count could not be read falls back to the floors: unknown length is not a
+    /// reason to allow unbounded output.
+    pub(crate) fn for_config(config: &ParserConfig) -> Self {
+        let pages = config
+            .pdf_info
+            .get("pages")
+            .and_then(|pages| pages.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        let max_files = (pages as usize)
+            .saturating_mul(config.poppler_max_files_per_page)
+            .max(MIN_POPPLER_FILE_BUDGET);
+        let max_bytes =
+            pages.saturating_mul(config.poppler_max_bytes_per_page).max(MIN_POPPLER_BYTE_BUDGET);
+        PopplerLimits {
+            timeout: config.poppler_timeout,
+            max_files,
+            max_bytes,
+        }
+    }
+}
+
+/// What the watchdog found when it decided to stop a process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LimitBreach {
+    /// The directory held this many entries, one past the limit.
+    Files(usize),
+    /// The directory held at least this many bytes.
+    Bytes(u64),
+}
+
+/// Reports the first limit `dir` exceeds, or `None` while it is within both.
+///
+/// Counting stops at the first breach rather than totalling the directory: `read_dir`
+/// yields entries lazily, so a directory of a million files costs the same to check as
+/// one of `max_files + 1`. Totalling it every 200 ms is what would make the watchdog
+/// more expensive than the thing it watches.
+///
+/// A directory that cannot be read yields `None`. It has not been shown to be over the
+/// limit, and killing a process over a transient `read_dir` error would fail parses that
+/// were fine.
+fn check_output_limits(dir: &Path, max_files: usize, max_bytes: u64) -> Option<LimitBreach> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        files += 1;
+        if files > max_files {
+            return Some(LimitBreach::Files(files));
+        }
+        if let Ok(metadata) = entry.metadata() {
+            bytes = bytes.saturating_add(metadata.len());
+            if bytes > max_bytes {
+                return Some(LimitBreach::Bytes(bytes));
+            }
+        }
+    }
+    None
+}
+
+/// Runs `command` to completion under `limits`, watching `watch_dir` for runaway output.
+///
+/// Behaves like [`Command::output`] when the process stays within its limits. When it
+/// does not, the child is killed and reaped, and the error names *which* limit was hit:
+/// a caller processing a corpus needs to tell "this document is merely enormous" from
+/// "this document makes poppler write without bound", and the two want different
+/// answers.
+///
+/// Only the child is signalled. The poppler tools are single processes that fork
+/// nothing, so there are no grandchildren to chase; the orphans seen in the field were
+/// poppler surviving the death of *rsrpp*, which is exactly what this function prevents.
+///
+/// Files the killed process left behind are not cleaned up here. They are inside the
+/// parse's temporary directory, which [`crate::config::ParserConfig`] removes whole.
+fn run_poppler(
+    program: &str,
+    args: &[String],
+    watch_dir: &Path,
+    limits: &PopplerLimits,
+) -> Result<Output> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| Error::msg(format!("Failed to start {}: {}", program, e)))?;
+
+    // The pipes have to be drained while the process runs. A poppler tool that fills the
+    // pipe buffer would otherwise block on write and never exit, which the watchdog
+    // would then report as a timeout — a hang caused by watching for hangs.
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+    let stdout_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(pipe) = stdout_pipe.as_mut() {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(pipe) = stderr_pipe.as_mut() {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let started = Instant::now();
+    let mut breach: Option<LimitBreach> = None;
+    let mut timed_out = false;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break Some(status);
+        }
+
+        if started.elapsed() >= limits.timeout {
+            timed_out = true;
+        } else {
+            breach = check_output_limits(watch_dir, limits.max_files, limits.max_bytes);
+        }
+
+        if timed_out || breach.is_some() {
+            let _ = child.kill();
+            // Reap it. Without this the killed process stays a zombie for as long as the
+            // parser runs, and a corpus run would accumulate one per bad document.
+            let _ = child.wait();
+            break None;
+        }
+
+        std::thread::sleep(POPPLER_POLL_INTERVAL);
+    };
+
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let stderr = stderr_reader.join().unwrap_or_default();
+
+    if timed_out {
+        return Err(Error::msg(format!(
+            "{} exceeded the time limit of {}s and was killed (poppler_timeout)",
+            program,
+            limits.timeout.as_secs()
+        )));
+    }
+    match breach {
+        Some(LimitBreach::Files(files)) => {
+            return Err(Error::msg(format!(
+                "{} exceeded the output limit of {} files and was killed \
+                 (poppler_max_files_per_page); {} left at least {} files in {}",
+                program,
+                limits.max_files,
+                program,
+                files,
+                watch_dir.display()
+            )));
+        }
+        Some(LimitBreach::Bytes(bytes)) => {
+            return Err(Error::msg(format!(
+                "{} exceeded the output limit of {} bytes and was killed \
+                 (poppler_max_bytes_per_page); {} left at least {} bytes in {}",
+                program,
+                limits.max_bytes,
+                program,
+                bytes,
+                watch_dir.display()
+            )));
+        }
+        None => {}
+    }
+
+    let status = status.ok_or_else(|| Error::msg(format!("{} was killed", program)))?;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
 
 pub(crate) fn get_pdf_info(
     config: &mut ParserConfig,
     verbose: bool,
     time: std::time::Instant,
 ) -> Result<()> {
-    let res =
-        Command::new("pdfinfo").args(&[config.pdf_path.clone()]).stdout(Stdio::piped()).output();
+    // The page count is not known yet -- this is the call that finds it -- so `pdfinfo`
+    // runs against the floor budgets. It reads the trailer and writes nothing, so only
+    // the timeout is doing any work here.
+    let limits = PopplerLimits::for_config(config);
+    let res = run_poppler(
+        "pdfinfo",
+        &[config.pdf_path.clone()],
+        config.temp_dir.path(),
+        &limits,
+    );
     let text = String::from_utf8(res?.stdout)?;
 
     if text.is_empty() {
@@ -63,18 +275,21 @@ pub(crate) fn save_pdf_as_figures(
     let pdf_path = Path::new(config.pdf_path.as_str());
     let dst_path = pdf_path.parent().unwrap().join(pdf_path.file_stem().unwrap().to_str().unwrap());
 
-    let res = Command::new("pdftocairo")
-        .args(&[
+    let limits = PopplerLimits::for_config(config);
+    let res = run_poppler(
+        "pdftocairo",
+        &[
             "-jpeg".to_string(),
             "-r".to_string(),
             "72".to_string(),
             pdf_path.to_str().unwrap().to_string(),
             dst_path.to_str().unwrap().to_string(),
-        ])
-        .stdout(Stdio::piped())
-        .output();
+        ],
+        config.temp_dir.path(),
+        &limits,
+    );
     if let Err(e) = res {
-        return Err(Error::msg(format!("Error: {}", e)));
+        return Err(e);
     }
 
     let glob_query = dst_path.file_name().unwrap().to_str().unwrap().to_string() + "*.jpg";
@@ -133,8 +348,12 @@ pub(crate) fn save_pdf_as_xml(
 ) -> Result<()> {
     let xml_path = Path::new(&config.pdf_xml_path);
 
-    let output = Command::new("pdftohtml")
-        .args(&[
+    // The call that runs away: `-c` writes one image file per tile, and a figure filled
+    // with a 1pt tiling pattern has no bound on how many tiles that is.
+    let limits = PopplerLimits::for_config(config);
+    let output = run_poppler(
+        "pdftohtml",
+        &[
             "-c".to_string(),
             "-s".to_string(),
             "-xml".to_string(),
@@ -142,10 +361,10 @@ pub(crate) fn save_pdf_as_xml(
             "1.0".to_string(),
             config.pdf_path.as_str().to_string(),
             xml_path.to_str().unwrap().to_string(),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()?;
+        ],
+        config.temp_dir.path(),
+        &limits,
+    )?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -999,8 +1218,10 @@ pub(crate) fn save_pdf_as_text(
 ) -> Result<()> {
     let html_path = Path::new(config.pdf_text_path.as_str());
 
-    let output = Command::new("pdftotext")
-        .args(&[
+    let limits = PopplerLimits::for_config(config);
+    let output = run_poppler(
+        "pdftotext",
+        &[
             "-nopgbrk".to_string(),
             "-htmlmeta".to_string(),
             "-bbox-layout".to_string(),
@@ -1008,10 +1229,10 @@ pub(crate) fn save_pdf_as_text(
             "72".to_string(),
             config.pdf_path.as_str().to_string(),
             html_path.to_str().unwrap().to_string(),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()?;
+        ],
+        config.temp_dir.path(),
+        &limits,
+    )?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1054,6 +1275,10 @@ pub(crate) async fn save_pdf(
     verbose: bool,
     time: std::time::Instant,
 ) -> Result<()> {
+    // Every by-product of this parse lands next to the PDF, so the directory has to
+    // exist before poppler is handed a path inside it.
+    config.temp_dir.ensure_exists()?;
+
     let save_path = config.pdf_path.as_str();
     if path_or_url.starts_with("http") {
         let res = request::get(path_or_url).await;
@@ -1099,6 +1324,182 @@ mod tests {
     use super::*;
     use crate::config::ParserConfig;
     use crate::test_utils::{BuiltinPaper, TestPapers};
+
+    /// A shell loop that produces `count_per_burst` files of `size` bytes, then pauses.
+    ///
+    /// The pause keeps the test from writing tens of thousands of files in the time it
+    /// takes the watchdog to come round, so the directory it has to remove afterwards
+    /// stays small. The real runaway needs no such help.
+    fn file_spewer(dir: &Path, size: usize) -> Vec<String> {
+        let payload = "a".repeat(size);
+        vec![
+            "-c".to_string(),
+            format!(
+                "cd '{}' && i=0; while :; do i=$((i+1)); printf '%s' '{}' > \"spew_$i\"; \
+                 if [ $((i % 20)) -eq 0 ]; then sleep 0.05; fi; done",
+                dir.display(),
+                payload
+            ),
+        ]
+    }
+
+    #[test]
+    fn test_run_poppler_returns_output_when_within_limits() {
+        let config = ParserConfig::new();
+        let limits = PopplerLimits {
+            timeout: Duration::from_secs(30),
+            max_files: 1_000,
+            max_bytes: 1 << 30,
+        };
+        let out = run_poppler(
+            "echo",
+            &["hello".to_string()],
+            config.temp_dir.path(),
+            &limits,
+        )
+        .expect("a command that finishes must not be reported as a breach");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hello");
+    }
+
+    #[test]
+    fn test_run_poppler_kills_a_process_that_exceeds_the_time_limit() {
+        let config = ParserConfig::new();
+        let limits = PopplerLimits {
+            timeout: Duration::from_millis(300),
+            max_files: 1_000_000,
+            max_bytes: 1 << 40,
+        };
+        let started = Instant::now();
+        let err = run_poppler(
+            "sleep",
+            &["30".to_string()],
+            config.temp_dir.path(),
+            &limits,
+        )
+        .expect_err("a process past its time limit must fail the parse");
+        let message = err.to_string();
+        assert!(
+            message.contains("exceeded the time limit"),
+            "the error must say the time limit was what stopped it, got: {message}"
+        );
+        assert!(
+            !message.contains("output limit"),
+            "a timeout must not be reported as a runaway, got: {message}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the process must be killed, not waited for"
+        );
+    }
+
+    #[test]
+    fn test_run_poppler_kills_a_process_that_exceeds_the_file_limit() {
+        let config = ParserConfig::new();
+        config.temp_dir.ensure_exists().unwrap();
+        let limits = PopplerLimits {
+            // Long enough that only the file count can be what stops it.
+            timeout: Duration::from_secs(60),
+            max_files: 50,
+            max_bytes: 1 << 40,
+        };
+        let args = file_spewer(config.temp_dir.path(), 1);
+        let started = Instant::now();
+        let err = run_poppler("sh", &args, config.temp_dir.path(), &limits)
+            .expect_err("output without bound must fail the parse");
+        let message = err.to_string();
+        assert!(
+            message.contains("exceeded the output limit of 50 files"),
+            "the error must name the file limit, got: {message}"
+        );
+        assert!(
+            !message.contains("time limit"),
+            "a runaway must not be reported as a timeout, got: {message}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the watchdog must stop it long before its time limit"
+        );
+    }
+
+    #[test]
+    fn test_run_poppler_kills_a_process_that_exceeds_the_byte_limit() {
+        let config = ParserConfig::new();
+        config.temp_dir.ensure_exists().unwrap();
+        let limits = PopplerLimits {
+            timeout: Duration::from_secs(60),
+            // Out of reach, so only the byte total can be what stops it.
+            max_files: 1_000_000,
+            max_bytes: 4_096,
+        };
+        let args = file_spewer(config.temp_dir.path(), 1_024);
+        let err = run_poppler("sh", &args, config.temp_dir.path(), &limits)
+            .expect_err("output too large must fail the parse");
+        let message = err.to_string();
+        assert!(
+            message.contains("exceeded the output limit of 4096 bytes"),
+            "the error must name the byte limit, got: {message}"
+        );
+    }
+
+    #[test]
+    fn test_poppler_limits_scale_with_the_page_count() {
+        let mut config = ParserConfig::new();
+
+        // No `pdfinfo` yet: the floors apply rather than a budget of zero.
+        let limits = PopplerLimits::for_config(&config);
+        assert_eq!(limits.max_files, MIN_POPPLER_FILE_BUDGET);
+        assert_eq!(limits.max_bytes, MIN_POPPLER_BYTE_BUDGET);
+
+        // The runaway document: 17 pages buys 3,400 files, which it passes in well under
+        // a second on its way to 1,079,890.
+        config.pdf_info.insert("pages".to_string(), "17".to_string());
+        let limits = PopplerLimits::for_config(&config);
+        assert_eq!(limits.max_files, 17 * config.poppler_max_files_per_page);
+        // Its byte budget is still the floor -- 17 pages of allowance is under it.
+        assert_eq!(limits.max_bytes, MIN_POPPLER_BYTE_BUDGET);
+
+        // A one-page document does not get a budget of 200 files: the floor takes over
+        // where the page count stops being a useful proxy for how much work is in the
+        // document.
+        config.pdf_info.insert("pages".to_string(), "1".to_string());
+        assert_eq!(
+            PopplerLimits::for_config(&config).max_files,
+            MIN_POPPLER_FILE_BUDGET
+        );
+
+        // A long one gets room: the 357-page scan in the corpus leaves 1,431 files.
+        config.pdf_info.insert("pages".to_string(), "357".to_string());
+        let limits = PopplerLimits::for_config(&config);
+        assert_eq!(limits.max_files, 357 * config.poppler_max_files_per_page);
+        assert!(
+            limits.max_files > 1_431 * 10,
+            "a healthy long scan must keep an order of magnitude of headroom"
+        );
+        assert_eq!(limits.max_bytes, 357 * config.poppler_max_bytes_per_page);
+    }
+
+    #[test]
+    fn test_check_output_limits_stops_counting_at_the_limit() {
+        let config = ParserConfig::new();
+        config.temp_dir.ensure_exists().unwrap();
+        let dir = config.temp_dir.path();
+        for i in 0..10 {
+            std::fs::write(dir.join(format!("f_{i}")), "0123456789").unwrap();
+        }
+
+        assert_eq!(check_output_limits(dir, 100, 1 << 30), None);
+        // One past the limit is what it reports: the count is deliberately abandoned
+        // there rather than carried to the true total.
+        assert_eq!(
+            check_output_limits(dir, 4, 1 << 30),
+            Some(LimitBreach::Files(5))
+        );
+        match check_output_limits(dir, 100, 20) {
+            Some(LimitBreach::Bytes(bytes)) => assert!(bytes > 20),
+            other => panic!("the byte limit must be reported as such, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_is_section_label_matches_only_a_lone_label() {
