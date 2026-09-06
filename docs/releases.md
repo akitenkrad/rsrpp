@@ -3,6 +3,31 @@
 # Release history
 
 <details open>
+<summary>2.0.1</summary>
+
+**The poppler output limits were measured against two points and missed the middle.**
+`DEFAULT_POPPLER_MAX_FILES_PER_PAGE` was 200, placed between a healthy document (4.0
+files per page) and the one pathological document known at the time (63,500 per page,
+a figure painted with 1pt tiling patterns). A 2,906-paper corpus then turned up a
+populated band between them: 16 papers write 231 to 3,491 files per page. Each finishes
+in under a second and leaves 12 to 154 MB — figure-heavy, not runaway — and 200 rejected
+every one of them, 0.6% of the corpus.
+
+- `DEFAULT_POPPLER_MAX_FILES_PER_PAGE` 200 -> 8,000. Clears the measured band by a
+  factor of 2.3; the pathological document is still stopped at 136,000 files, an eighth
+  of the 1,079,890 it writes. What this gives up is stopping a runaway inside its first
+  second — the byte cap is what binds early now.
+- `DEFAULT_POPPLER_MAX_BYTES_PER_PAGE` 10 MiB -> 20 MiB. One paper in the band writes
+  154 MB over 11 pages, so raising only the file count would have moved it from one cap
+  to the other. The 357-page reference scan keeps a factor of ~43.
+- `MIN_POPPLER_FILE_BUDGET` no longer binds at the defaults: one page already buys four
+  times it. It is kept for callers that lower the per-page budget.
+
+No API change. A caller that set these fields explicitly is unaffected.
+
+</details>
+
+<details>
 <summary>2.0.0</summary>
 
 **Breaking changes.** Two of them, both about behaviour rather than signatures.
