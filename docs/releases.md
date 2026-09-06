@@ -3,6 +3,31 @@
 # Release history
 
 <details open>
+<summary>2.0.2</summary>
+
+**A font name could cost the whole document.** `pdftohtml -xml` copies the embedded font
+name into `family=` in whatever encoding the PDF used, so a Chinese or Japanese font
+leaves Shift_JIS, GBK or Big5 bytes in an otherwise clean file. `read_to_string` rejects
+a file over a single bad byte, so those documents failed with `stream did not contain
+valid UTF-8` — seven in a 2,906-paper corpus, every one of them a healthy PDF whose text
+`pdftotext` extracted without complaint. Section detection reads the `<text>` elements
+and their geometry and never looks at the font name, so poppler output is now decoded
+leniently: the undecodable bytes become U+FFFD and the document survives. `pdfinfo`
+output is read the same way, since it echoes the PDF's own Title and Author.
+
+**The default model is now `gpt-5.4-nano`** (was `gpt-5.2`). Measured on the equations of
+three paper pages: $0.00191 against $0.01483, a factor of 7.8, recovering the same
+ground-truth tokens and emitting more lines in a quarter less wall time. Newer is not
+cheaper here — the gpt-5.6 tier bills hidden reasoning as output, and this crate only
+ever asks for transcription and extraction, so gpt-5.6-luna came out 1.9x the cost and
+4.3x the latency of gpt-5.4-nano at a near-identical list price. `OPENAI_API_MODEL`
+overrides as before.
+
+No API change.
+
+</details>
+
+<details>
 <summary>2.0.1</summary>
 
 **The poppler output limits were measured against two points and missed the middle.**
