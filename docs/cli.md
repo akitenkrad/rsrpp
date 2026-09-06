@@ -37,7 +37,7 @@ rsrpp --pdf ./paper.pdf --out output.json --no-llm
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `OPENAI_API_KEY` | OpenAI API key (required for LLM features) | - |
-| `OPENAI_API_MODEL` | Model to use for LLM processing | `gpt-5.2` |
+| `OPENAI_API_MODEL` | Model to use for LLM processing | `gpt-5.4-nano` |
 
 ## Exit codes
 

@@ -37,7 +37,7 @@ rsrpp --pdf ./paper.pdf --out output.json --no-llm
 | 変数 | 説明 | 既定値 |
 |------|------|--------|
 | `OPENAI_API_KEY` | OpenAI の API キー（LLM 機能に必要） | - |
-| `OPENAI_API_MODEL` | LLM 処理に使うモデル | `gpt-5.2` |
+| `OPENAI_API_MODEL` | LLM 処理に使うモデル | `gpt-5.4-nano` |
 
 ## 終了コード
 

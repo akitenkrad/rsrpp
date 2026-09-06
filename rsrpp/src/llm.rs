@@ -129,8 +129,23 @@ Only return the JSON array, no other text.
 References section:
 "#;
 
-/// Default model to use when OPENAI_API_MODEL is not set
-const DEFAULT_MODEL: &str = "gpt-5.2";
+/// Default model to use when OPENAI_API_MODEL is not set.
+///
+/// Chosen by measurement rather than by generation (2026-09-06). Transcribing the
+/// equations on three paper pages cost $0.00191 here against $0.01483 on gpt-5.2 — a
+/// factor of 7.8 — while recovering the same ground-truth tokens and emitting more
+/// lines, in a quarter less wall time.
+///
+/// **Newer is not cheaper here.** The gpt-5.6 tier bills hidden reasoning as output,
+/// and this work needs none of it: gpt-5.6-luna spent 1,537 of its 1,791 output tokens
+/// reasoning, which made it 1.9x the cost and 4.3x the latency of gpt-5.4-nano despite
+/// a near-identical list price; gpt-5.6-terra came out at 3.3x the cost of the gpt-5.2
+/// it would replace. Every call this crate makes is transcription or extraction —
+/// section headings from a page image, equations from a page image, references from a
+/// block of text — so reasoning tokens are paid for and thrown away.
+///
+/// That tier also rejects `temperature`, which every call site here sets to 0.0.
+const DEFAULT_MODEL: &str = "gpt-5.4-nano";
 
 /// Check if LLM processing is available (OPENAI_API_KEY is set)
 pub fn is_llm_available() -> bool {
@@ -180,7 +195,7 @@ pub fn estimate_math_density(page_text: &str) -> f32 {
 }
 
 /// Extract text (including math formulas in LaTeX) from a page image using LLM Vision.
-/// The model is determined by OPENAI_API_MODEL environment variable (default: gpt-5.2).
+/// The model is determined by OPENAI_API_MODEL environment variable (default: gpt-5.4-nano).
 pub async fn extract_page_text_with_math(
     image_path: &str,
     _page_number: PageNumber,
@@ -213,7 +228,7 @@ pub async fn extract_page_text_with_math(
 
 /// Validate and extract section structure from page images using LLM Vision.
 /// Sends the first few pages to detect the paper's section structure.
-/// The model is determined by OPENAI_API_MODEL environment variable (default: gpt-5.2).
+/// The model is determined by OPENAI_API_MODEL environment variable (default: gpt-5.4-nano).
 pub async fn validate_sections(first_pages_images: &[String]) -> Result<Vec<String>> {
     if first_pages_images.is_empty() {
         return Ok(Vec::new());
@@ -1067,7 +1082,7 @@ mod tests {
         // Clear the environment variable to test default
         std::env::remove_var("OPENAI_API_MODEL");
         let model = get_model_id();
-        assert_eq!(model, "gpt-5.2");
+        assert_eq!(model, "gpt-5.4-nano");
     }
 
     #[test]
