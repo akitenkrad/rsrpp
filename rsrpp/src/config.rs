@@ -145,24 +145,47 @@ pub const DEFAULT_POPPLER_TIMEOUT: Duration = Duration::from_secs(900);
 ///
 /// The gap this sits in is three orders of magnitude wide. A healthy 357-page scan
 /// leaves 1,431 files in the working directory across all four poppler calls — 4.0 per
-/// page. The one pathological document in the corpus (17 pages, a figure filled with 99
-/// tiling patterns whose cells are 1pt and 4pt, so `pdftohtml` writes one tiny PNG per
-/// tile) produced 1,079,890 files — 63,500 per page. 200 leaves the healthy end a factor
-/// of 50 and still stops the runaway inside its first second.
-pub const DEFAULT_POPPLER_MAX_FILES_PER_PAGE: usize = 200;
+/// page. The one pathological document (17 pages, a figure filled with 99 tiling
+/// patterns whose cells are 1pt and 4pt, so `pdftohtml` writes one tiny PNG per tile)
+/// produced 1,079,890 files — 63,500 per page.
+///
+/// **The two ends are not the whole distribution.** 200 was placed against those two
+/// numbers alone, and a 2,906-paper corpus later showed a populated band between them:
+/// 16 papers write 231 to 3,491 files per page — figure-heavy, but each finishes in
+/// under a second and leaves 12 to 154 MB. They are not runaways, and 200 rejected
+/// every one of them (0.6% of the corpus). Measured 2026-09-06; the widest was a
+/// 2-page paper writing 3,491 files.
+///
+/// 8,000 clears that band by a factor of 2.3 and still stops the pathological document
+/// at 136,000 files — an eighth of what it wants to write, and short of filling a disk.
+/// What it gives up is the old promise of stopping a runaway inside its first second:
+/// the budget is now large enough that a fast writer reaches it in seconds rather than
+/// instantly. `DEFAULT_POPPLER_MAX_BYTES_PER_PAGE` is the cap that still binds early
+/// there.
+pub const DEFAULT_POPPLER_MAX_FILES_PER_PAGE: usize = 8_000;
 
 /// How many bytes poppler may write per page of the document.
 ///
 /// A second, independent cap: the file count catches output that is unbounded in
 /// *number*, this catches output unbounded in *size*. The same 357-page scan occupies
-/// 168 MB (470 KB per page), so 10 MB per page leaves a factor of ~21.
-pub const DEFAULT_POPPLER_MAX_BYTES_PER_PAGE: u64 = 10 * 1024 * 1024;
+/// 168 MB (470 KB per page), so 10 MB per page left a factor of ~21.
+///
+/// Raised to 20 MB with the file budget (2026-09-06). One paper in the figure-heavy
+/// band writes 154 MB over 11 pages — 14 MB per page — so lifting only the file count
+/// would have moved it from one cap to the other without letting it through. The
+/// 357-page scan still has a factor of ~43, and the pathological document (24.7 MB per
+/// page) is still stopped by this cap before the file budget reaches it.
+pub const DEFAULT_POPPLER_MAX_BYTES_PER_PAGE: u64 = 20 * 1024 * 1024;
 
 /// The smallest file budget any document gets, however few pages it has.
 ///
 /// Without a floor a short document would be held to a budget of a handful of files,
 /// and per-page limits are a poor description of a 1-page PDF: page count is only a
 /// proxy for how much work is legitimately in the document.
+///
+/// Since the per-page budget went to 8,000 this floor no longer binds at the default —
+/// one page already buys four times it. It is kept because the per-page value is
+/// configurable and a caller that lowers it still wants the floor.
 pub const MIN_POPPLER_FILE_BUDGET: usize = 2_000;
 
 /// The smallest byte budget any document gets. See [`MIN_POPPLER_FILE_BUDGET`].

@@ -65,8 +65,8 @@ bounded too, per page of the document:
 | Field | Default | Constant |
 |---|---|---|
 | `poppler_timeout` | 900s | `DEFAULT_POPPLER_TIMEOUT` |
-| `poppler_max_files_per_page` | 200 | `DEFAULT_POPPLER_MAX_FILES_PER_PAGE` |
-| `poppler_max_bytes_per_page` | 10 MiB | `DEFAULT_POPPLER_MAX_BYTES_PER_PAGE` |
+| `poppler_max_files_per_page` | 8,000 | `DEFAULT_POPPLER_MAX_FILES_PER_PAGE` |
+| `poppler_max_bytes_per_page` | 20 MiB | `DEFAULT_POPPLER_MAX_BYTES_PER_PAGE` |
 
 Short documents get a floor rather than a proportional budget, so that a two-page paper
 is not held to 400 files: `MIN_POPPLER_FILE_BUDGET` (2,000 files) and

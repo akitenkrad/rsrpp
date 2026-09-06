@@ -27,8 +27,8 @@ Every poppler call is watched and killed if it passes either a time limit or an 
 limit; both are needed, because a 1,000-page scan is slow for an honest reason and has
 to be told apart from a document that will never finish. Budgets are per page, with a
 floor for short documents: `DEFAULT_POPPLER_TIMEOUT` (900s),
-`DEFAULT_POPPLER_MAX_FILES_PER_PAGE` (200), `DEFAULT_POPPLER_MAX_BYTES_PER_PAGE`
-(10 MiB), all settable on `ParserConfig`. A breach comes back as
+`DEFAULT_POPPLER_MAX_FILES_PER_PAGE` (8,000), `DEFAULT_POPPLER_MAX_BYTES_PER_PAGE`
+(20 MiB), all settable on `ParserConfig`. A breach comes back as
 `converter::PopplerLimitError`, so callers can recognise it by type rather than by
 matching on the message.
 

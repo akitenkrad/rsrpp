@@ -1526,22 +1526,35 @@ mod tests {
         assert_eq!(limits.max_files, MIN_POPPLER_FILE_BUDGET);
         assert_eq!(limits.max_bytes, MIN_POPPLER_BYTE_BUDGET);
 
-        // The runaway document: 17 pages buys 3,400 files, which it passes in well under
-        // a second on its way to 1,079,890.
+        // The runaway document: 17 pages buys 136,000 files, still an eighth of the
+        // 1,079,890 it wants to write. The byte budget is what stops it first -- it
+        // occupies 24.7 MB per page, over the 20 MB allowance.
         config.pdf_info.insert("pages".to_string(), "17".to_string());
         let limits = PopplerLimits::for_config(&config);
         assert_eq!(limits.max_files, 17 * config.poppler_max_files_per_page);
-        // Its byte budget is still the floor -- 17 pages of allowance is under it.
-        assert_eq!(limits.max_bytes, MIN_POPPLER_BYTE_BUDGET);
+        assert_eq!(limits.max_bytes, 17 * config.poppler_max_bytes_per_page);
+        assert!(
+            limits.max_files < 1_079_890,
+            "the runaway document must still be stopped short of what it writes"
+        );
 
-        // A one-page document does not get a budget of 200 files: the floor takes over
-        // where the page count stops being a useful proxy for how much work is in the
-        // document.
+        // The figure-heavy band the corpus turned up: 231 to 3,491 files per page over
+        // 16 papers, each finishing in under a second. A 2-page paper writing 3,491 per
+        // page is the widest of them, and has to fit.
+        config.pdf_info.insert("pages".to_string(), "2".to_string());
+        assert!(
+            PopplerLimits::for_config(&config).max_files > 2 * 3_491,
+            "a figure-heavy short paper must not be treated as a runaway"
+        );
+
+        // A one-page document is no longer held to the floor: the per-page budget alone
+        // is four times it. The floor still exists for a caller that lowers the budget.
         config.pdf_info.insert("pages".to_string(), "1".to_string());
         assert_eq!(
             PopplerLimits::for_config(&config).max_files,
-            MIN_POPPLER_FILE_BUDGET
+            config.poppler_max_files_per_page
         );
+        assert!(config.poppler_max_files_per_page > MIN_POPPLER_FILE_BUDGET);
 
         // A long one gets room: the 357-page scan in the corpus leaves 1,431 files.
         config.pdf_info.insert("pages".to_string(), "357".to_string());

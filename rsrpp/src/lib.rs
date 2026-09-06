@@ -109,8 +109,8 @@
 //! ones:
 //!
 //! - [`config::DEFAULT_POPPLER_TIMEOUT`] (900s)
-//! - [`config::DEFAULT_POPPLER_MAX_FILES_PER_PAGE`] (200)
-//! - [`config::DEFAULT_POPPLER_MAX_BYTES_PER_PAGE`] (10 MiB)
+//! - [`config::DEFAULT_POPPLER_MAX_FILES_PER_PAGE`] (8,000)
+//! - [`config::DEFAULT_POPPLER_MAX_BYTES_PER_PAGE`] (20 MiB)
 //!
 //! A breach is reported as [`converter::PopplerLimitError`], so a caller can recognise
 //! it by type rather than by matching on the message:

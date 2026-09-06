@@ -25,8 +25,8 @@
 監視され，制限時間か出力量のどちらかを超えると停止される．両方が要るのは，1,000 ページの
 スキャンは正当な理由で遅いのであって，決して終わらない文書とは区別しなければならないからである．
 上限はページ数に比例し，短い文書には下限がある: `DEFAULT_POPPLER_TIMEOUT`（900 秒），
-`DEFAULT_POPPLER_MAX_FILES_PER_PAGE`（200），`DEFAULT_POPPLER_MAX_BYTES_PER_PAGE`
-（10 MiB）．いずれも `ParserConfig` から変更できる．超過は
+`DEFAULT_POPPLER_MAX_FILES_PER_PAGE`（8,000），`DEFAULT_POPPLER_MAX_BYTES_PER_PAGE`
+（20 MiB）．いずれも `ParserConfig` から変更できる．超過は
 `converter::PopplerLimitError` として返るので，メッセージの照合ではなく型で判別できる．
 
 **放置された作業ディレクトリを回収するようになった．** `SIGKILL` はデストラクタを走らせない
