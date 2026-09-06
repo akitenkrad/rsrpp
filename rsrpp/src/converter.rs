@@ -280,6 +280,24 @@ fn run_poppler(
     })
 }
 
+/// Read a file poppler wrote, replacing any byte sequence that is not UTF-8.
+///
+/// `std::fs::read_to_string` rejects the whole file over a single bad byte, and poppler
+/// writes bad bytes as a matter of course: the `family=` attribute of `pdftohtml -xml`
+/// carries the font name exactly as the PDF embedded it, so a Chinese or Japanese font
+/// leaves legacy-encoded bytes in an otherwise clean document —
+/// `family="ABCDEE+\x82l\x82r \x83S\x83V\x83b\x83N"` is Shift_JIS for ＭＳ ゴシック,
+/// and GBK and Big5 font names appear the same way. Seven papers in a 2,906-paper
+/// corpus failed on this with `stream did not contain valid UTF-8`, every one of them
+/// a healthy PDF whose text `pdftotext` extracted without complaint.
+///
+/// **Nothing this crate reads is in the font name.** The section detection walks the
+/// `<text>` elements and their geometry, so replacing the undecodable bytes with U+FFFD
+/// loses a font label and keeps the document.
+fn read_poppler_output(path: &Path) -> Result<String> {
+    Ok(String::from_utf8_lossy(&std::fs::read(path)?).into_owned())
+}
+
 pub(crate) fn get_pdf_info(
     config: &mut ParserConfig,
     verbose: bool,
@@ -295,7 +313,11 @@ pub(crate) fn get_pdf_info(
         config.temp_dir.path(),
         &limits,
     );
-    let text = String::from_utf8(res?.stdout)?;
+    // Lossy for the same reason as `read_poppler_output`: `pdfinfo` echoes the PDF's own
+    // Title and Author, which carry whatever encoding the producer used. No paper has hit
+    // this yet, but the failure would be identical -- the whole parse lost over a byte in
+    // a field nothing here reads.
+    let text = String::from_utf8_lossy(&res?.stdout).into_owned();
 
     if text.is_empty() {
         return Err(Error::msg("Error: pdf file is broken or invalid url"));
@@ -452,7 +474,7 @@ pub(crate) fn save_pdf_as_xml(
         }
     }
 
-    let xml_text = std::fs::read_to_string(xml_path)?;
+    let xml_text = read_poppler_output(xml_path)?;
     detect_sections(config, &xml_text, verbose, time)?;
 
     return Ok(());
@@ -1515,6 +1537,63 @@ mod tests {
             Some(PopplerLimit::Bytes),
             "a caller must be able to tell this apart without reading the message"
         );
+    }
+
+    /// The bytes that cost seven papers. `pdftohtml` copies the embedded font name into
+    /// `family=` verbatim, so a legacy-encoded Japanese or Chinese font name lands in an
+    /// otherwise clean XML file and `read_to_string` rejects the document over it.
+    #[test]
+    fn a_legacy_encoded_font_name_does_not_lose_the_document() {
+        let config = ParserConfig::new();
+        config.temp_dir.ensure_exists().unwrap();
+        let path = config.temp_dir.path().join("out.xml");
+
+        // Taken from P00001824: Shift_JIS for "ＭＳ ゴシック" inside a real attribute.
+        let mut bytes = br#"<text top="10" family="ABCDEE+"#.to_vec();
+        bytes.extend_from_slice(b"\x82\x6c\x82\x72 \x83\x53\x83\x56\x83\x62\x83\x4e");
+        bytes.extend_from_slice(br#"">Introduction</text>"#);
+        std::fs::write(&path, &bytes).unwrap();
+
+        // The whole file is unreadable the old way ...
+        assert!(std::fs::read_to_string(&path).is_err());
+
+        // ... and readable this way, with the text intact.
+        let text = read_poppler_output(&path).unwrap();
+        assert!(text.contains("Introduction"), "本文が失われた: {text}");
+        assert!(text.contains(r#"top="10""#), "座標が失われた: {text}");
+        assert!(text.contains('\u{fffd}'), "不正バイトが置換されていない: {text}");
+    }
+
+    /// GBK and Big5 names reach the same place; the point is that no encoding has to be
+    /// recognised for the parse to survive one.
+    #[test]
+    fn every_undecodable_byte_is_replaced_not_rejected() {
+        let config = ParserConfig::new();
+        config.temp_dir.ensure_exists().unwrap();
+        let path = config.temp_dir.path().join("out.xml");
+
+        let mut bytes = b"<a>".to_vec();
+        bytes.extend_from_slice(b"\xcb\xce\xcc\xe5"); // GBK: 宋体 (P00000679)
+        bytes.extend_from_slice(b"|");
+        bytes.extend_from_slice(b"\xb2\xd3\xa9\xfa\xc5\xe9"); // Big5 系 (P00002619)
+        bytes.extend_from_slice(b"</a>");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let text = read_poppler_output(&path).unwrap();
+        assert!(text.starts_with("<a>") && text.ends_with("</a>"));
+        assert!(text.contains('|'), "区切りまで巻き込んで落ちている: {text}");
+    }
+
+    /// A file that is already valid UTF-8 comes back byte for byte -- the lossy read must
+    /// not be paying for itself with a silent change to healthy documents.
+    #[test]
+    fn valid_utf8_is_returned_unchanged() {
+        let config = ParserConfig::new();
+        config.temp_dir.ensure_exists().unwrap();
+        let path = config.temp_dir.path().join("out.xml");
+        let src = "<text>節 2.1 — Introduction ∑ x²</text>";
+        std::fs::write(&path, src).unwrap();
+        assert_eq!(read_poppler_output(&path).unwrap(), src);
     }
 
     #[test]
