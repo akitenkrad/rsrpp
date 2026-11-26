@@ -1,7 +1,7 @@
 use crate::config::ParserConfig;
 use crate::models::*;
 #[cfg(feature = "table-detection")]
-use opencv::core::{Vec4f, Vector};
+use opencv::core::{Vec4i, Vector};
 #[cfg(feature = "table-detection")]
 use opencv::imgcodecs;
 #[cfg(feature = "table-detection")]
@@ -112,7 +112,7 @@ pub fn extract_tables(image_path: &str, tables: &mut Vec<Coordinate>, width: i32
     imgproc::canny_def(&src_gray, &mut edges, 50.0, 200.0).unwrap();
 
     let min_line_length = src.size().unwrap().width as f64 / 10.0;
-    let mut s_lines = Vector::<Vec4f>::new();
+    let mut s_lines = Vector::<Vec4i>::new();
     imgproc::hough_lines_p(
         &edges,
         &mut s_lines,
@@ -127,6 +127,7 @@ pub fn extract_tables(image_path: &str, tables: &mut Vec<Coordinate>, width: i32
     let mut lines: Vec<(Point, Point)> = Vec::new();
     for s_line in s_lines {
         let [x1, y1, x2, y2] = *s_line;
+        let (x1, y1, x2, y2) = (x1 as f32, y1 as f32, x2 as f32, y2 as f32);
 
         let a = (y2 - y1) / (x2 - x1);
         if a.abs() > 1e-2 {
