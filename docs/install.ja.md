@@ -15,7 +15,7 @@ brew install poppler opencv pkg-config
 sudo dnf install poppler-utils opencv-devel clang clang-devel
 ```
 
-**対応する OpenCV のバージョンは 4.x（4.11 と 4.13 で確認済み）．** OpenCV は動的リンク
+**対応する OpenCV のバージョンは 4.x と 5.0（4.11，4.13，5.0.0 で確認済み）．** OpenCV は動的リンク
 なので，CLI をインストールする前に [OpenCV のリンク](#opencv-のリンク) を読むこと．
 
 ## ライブラリとして使う

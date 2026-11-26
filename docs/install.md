@@ -15,7 +15,7 @@ brew install poppler opencv pkg-config
 sudo dnf install poppler-utils opencv-devel clang clang-devel
 ```
 
-**Supported OpenCV versions: 4.x (tested against 4.11 and 4.13).** OpenCV is linked
+**Supported OpenCV versions: 4.x and 5.0 (tested against 4.11, 4.13 and 5.0.0).** OpenCV is linked
 dynamically, so read [OpenCV linking](#opencv-linking) before installing the CLI.
 
 ## As a library

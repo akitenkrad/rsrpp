@@ -3,6 +3,24 @@
 # リリース履歴
 
 <details open>
+<summary>2.0.3</summary>
+
+**OpenCV 5 で表の検出がコンパイルできなかった．** `opencv` crate は手元の OpenCV のヘッダから
+バインディングを生成するが，OpenCV 5.0 に対しては `Vector<Vec4f>` を生成せず，`Vector<Vec4i>`
+しか作らない．`extract_tables` は `HoughLinesP` の出力を `Vector<Vec4f>` で受けていたため，
+Homebrew の OpenCV 5.0.0 では既定の `table-detection` フィーチャが `E0277` で止まり，
+`cargo install rsrpp-cli` も失敗していた．`HoughLinesP` はもともと整数の端点を返すので，
+`Vec4i` で受けて，計算の前に `f32` に変換するようにした．傾きと長さの判定は従来と同じ値で
+行われ，垂直な線分もゼロ除算にならず，従来どおり傾きが無限大になって除外される．
+OpenCV 4.x でのビルドには影響しない．
+
+`rsrpp-cli` が要求する `rsrpp` を 2.0.3 にした．
+
+API の変更は無い．
+
+</details>
+
+<details>
 <summary>2.0.2</summary>
 
 **フォント名 1 つで文書全体を失っていた．** `pdftohtml -xml` は埋め込みフォント名を PDF が

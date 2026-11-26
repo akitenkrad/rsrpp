@@ -3,6 +3,25 @@
 # Release history
 
 <details open>
+<summary>2.0.3</summary>
+
+**Table detection did not compile against OpenCV 5.** The `opencv` crate generates its
+bindings from the installed OpenCV headers, and against OpenCV 5.0 it no longer emits
+`Vector<Vec4f>` — only `Vector<Vec4i>`. `extract_tables` collected the output of
+`HoughLinesP` into `Vector<Vec4f>`, so with Homebrew's OpenCV 5.0.0 the default
+`table-detection` feature failed with `E0277` and `cargo install rsrpp-cli` stopped there.
+`HoughLinesP` returns integer endpoints in the first place, so the lines are now read as
+`Vec4i` and converted to `f32` before any arithmetic: the slope and length checks run on
+the same values as before, and a vertical segment still yields an infinite slope and is
+skipped rather than dividing by zero. Builds against OpenCV 4.x are unaffected.
+
+`rsrpp-cli` now requires `rsrpp` 2.0.3.
+
+No API changes.
+
+</details>
+
+<details>
 <summary>2.0.2</summary>
 
 **A font name could cost the whole document.** `pdftohtml -xml` copies the embedded font
